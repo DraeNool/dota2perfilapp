@@ -1,0 +1,40 @@
+# Configuración local con la API key — NO versionar
+config.json
+
+# Prototipo legacy con key hardcodeada — se conserva local, la versión pública
+# sanitizada es dota2_config_sync_meta_meta_favorites_recent20_v2_sanitized.py
+dota2_config_sync_meta_meta_favorites_recent20_v2.py
+
+# Export de skills local, no forma parte de la app
+skills-export.zip
+
+# Caché de respuestas de APIs
+.cache/
+
+# Backups generados por la app
+backup_570_*/
+
+# Builds de PyInstaller
+build/
+dist/
+*.manifest
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Tests / herramientas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Sistema
+Thumbs.db
+.DS_Store
+
+# Config local de Claude Code (skills, settings) — no es parte de la app
+.claude/

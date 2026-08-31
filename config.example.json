@@ -1,0 +1,21 @@
+{
+  "steam_api_key": "",
+  "preferred_main_id64": "76561198128824716",
+  "favorites_limit": 15,
+  "recent_matches_limit": 20,
+  "cache_ttl_seconds": 600,
+  "hero_map_ttl_seconds": 86400,
+  "opendota_min_interval": 1.1,
+  "meta_grids_ttl_seconds": 3600,
+  "meta_meta": {
+    "config_name": "Meta Meta",
+    "categories": [
+      {"category_name": "OFFLANE / TIER S - A  / POS 3", "x_position": 0.0, "y_position": 0.0, "width": 474.782623, "height": 259.130432, "hero_ids": [2, 135, 60, 104, 36, 14, 128]},
+      {"category_name": "SOFT / POS 4", "x_position": 833.913086, "y_position": 0.0, "width": 304.347839, "height": 295.652191, "hero_ids": [14, 71, 22, 105, 62, 88, 74]},
+      {"category_name": "MID / POS 2", "x_position": 474.782623, "y_position": 0.0, "width": 357.391327, "height": 169.565216, "hero_ids": [74, 128, 25, 13, 90, 34, 76]},
+      {"category_name": "CARRY / POS 1", "x_position": 0.869565, "y_position": 300.0, "width": 296.521759, "height": 163.478271, "hero_ids": [6, 41, 12, 8, 54, 93, 67]},
+      {"category_name": "COMFORT", "x_position": 310.434784, "y_position": 286.086975, "width": 389.565216, "height": 253.913055, "hero_ids": [92, 23, 97, 38, 7, 98, 55, 107]},
+      {"category_name": "SUPP / POS 5", "x_position": 832.173950, "y_position": 295.652191, "width": 335.652191, "height": 185.217392, "hero_ids": [14, 31, 87, 86, 27, 75, 128]}
+    ]
+  }
+}
