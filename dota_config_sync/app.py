@@ -568,7 +568,6 @@ class App(ctk.CTk):
                 log_fn=self._log_async,
             )
             out_path = hero_grid.save_hero_grid(dst["path"] / "570", payload)
-            self._log_async("✔ Meta Meta: plantilla conservada.")
             self._log_async(f'✔ Favoritos performance ({len(perf_names)}): {", ".join(perf_names) or "ninguno"}')
             self._log_async(f'✔ Últimas 20 ({len(recent_names)}): {", ".join(recent_names) or "ninguno"}')
             self.after(0, self._on_hero_grid_done, out_path, perf_names, recent_names, status_msg)

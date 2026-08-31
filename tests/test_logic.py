@@ -192,3 +192,45 @@ def test_parse_meta_hero_grids_html_unbalanced_brackets_raises():
     broken = _D2PT_FIXTURE.split("],config_name")[0]  # corta el array a la mitad
     with pytest.raises(ValueError):
         dota2protracker.parse_meta_hero_grids_html(broken)
+
+
+_D2PT_ROLES_FIXTURE = (
+    'garbage... roles:[{position:"pos 1",roleName:"Carry",icon:"/x.svg",'
+    'heroes:[{hero_id:21,hero_name:"Windranger",win_rate:.527},'
+    '{hero_id:8,hero_name:"Juggernaut",win_rate:-.518}],hasMore:false},'
+    '{position:"pos 4",roleName:"Support",icon:"/y.svg",'
+    'heroes:[{hero_id:62,hero_name:"Bounty Hunter",win_rate:.564}],hasMore:false}'
+    '] ...trailing'
+)
+
+
+def test_parse_meta_roles_html_extracts_positions_and_fixes_bare_decimals():
+    roles = dota2protracker.parse_meta_roles_html(_D2PT_ROLES_FIXTURE)
+    assert roles == {"pos 1": [21, 8], "pos 4": [62]}
+
+
+def test_parse_meta_roles_html_missing_marker_raises():
+    with pytest.raises(ValueError):
+        dota2protracker.parse_meta_roles_html("<html>no roles here</html>")
+
+
+def test_apply_role_heroes_replaces_pos_categories_keeps_comfort_and_layout():
+    meta_meta = {
+        "config_name": "Meta Meta",
+        "categories": [
+            {"category_name": "CARRY / POS 1", "x_position": 1.0, "y_position": 2.0,
+             "width": 3.0, "height": 4.0, "hero_ids": [999]},
+            {"category_name": "COMFORT", "x_position": 5.0, "y_position": 6.0,
+             "width": 7.0, "height": 8.0, "hero_ids": [111, 222]},
+        ],
+    }
+    role_heroes = {"pos 1": [21, 8, 67]}
+
+    updated = dota2protracker.apply_role_heroes(meta_meta, role_heroes)
+
+    carry, comfort = updated["categories"]
+    assert carry["hero_ids"] == [21, 8, 67]
+    assert carry["x_position"] == 1.0 and carry["width"] == 3.0  # layout intacto
+    assert comfort["hero_ids"] == [111, 222]  # COMFORT nunca se toca
+    # el original no se muta
+    assert meta_meta["categories"][0]["hero_ids"] == [999]

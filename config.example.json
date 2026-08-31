@@ -1,6 +1,6 @@
 {
   "steam_api_key": "",
-  "preferred_main_id64": "76561198128824716",
+  "preferred_main_id64": "76561198000000000",
   "favorites_limit": 15,
   "recent_matches_limit": 20,
   "cache_ttl_seconds": 600,

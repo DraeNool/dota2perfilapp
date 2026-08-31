@@ -14,7 +14,8 @@ def build_hero_grid(steam_id3: str, *, meta_meta: dict, favorites_limit: int,
                     log_fn=None) -> tuple[dict, list[str], list[str], str]:
     """
     Construye el payload con:
-      - Meta Meta (plantilla configurable)
+      - Meta Meta (plantilla configurable, con hero_ids por posición actualizados
+        desde el ranking Meta de Dota2ProTracker — COMFORT y el layout se conservan)
       - Favoritos (performance + últimas 20 partidas)
       - Meta D2PT (grids públicos de Dota2ProTracker, scrapeados)
 
@@ -35,6 +36,11 @@ def build_hero_grid(steam_id3: str, *, meta_meta: dict, favorites_limit: int,
         log_fn(f"  Últimas 20: {recent_msg}")
         log_fn("  Descargando Meta de Dota2ProTracker...")
 
+    role_heroes, roles_msg = dota2protracker.fetch_meta_roles(grids_ttl)
+    updated_meta_meta = dota2protracker.apply_role_heroes(meta_meta, role_heroes) if role_heroes else meta_meta
+    if log_fn:
+        log_fn(f"  Meta Meta: {roles_msg}")
+
     d2pt_configs, d2pt_msg = dota2protracker.fetch_meta_hero_grids(grids_ttl)
     if log_fn:
         log_fn(f"  D2PT: {d2pt_msg}")
@@ -42,7 +48,7 @@ def build_hero_grid(steam_id3: str, *, meta_meta: dict, favorites_limit: int,
     payload = {
         "version": 3,
         "configs": [
-            meta_meta,
+            updated_meta_meta,
             {
                 "config_name": "Favoritos",
                 "categories": [
@@ -55,7 +61,7 @@ def build_hero_grid(steam_id3: str, *, meta_meta: dict, favorites_limit: int,
             *d2pt_configs,
         ],
     }
-    status_msg = f"Performance: {perf_msg} | Recientes: {recent_msg} | D2PT: {d2pt_msg}"
+    status_msg = f"Meta Meta: {roles_msg} | Performance: {perf_msg} | Recientes: {recent_msg} | D2PT: {d2pt_msg}"
     return payload, perf_names, recent_names, status_msg
 
 
