@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dota-config-sync"
-version = "5.0.0"
+version = "5.0.1"
 description = "Sincroniza configuración y hero grids entre cuentas de Steam/Dota 2"
 readme = "README.md"
 requires-python = ">=3.10"
