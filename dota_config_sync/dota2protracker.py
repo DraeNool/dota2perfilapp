@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 
 GRIDS_URL = "https://dota2protracker.com/meta-hero-grids"
 
-_PAYLOAD_MARKER = '"data":{grids:{matches:{configs:'
+_PAYLOAD_MARKER = "matches:{configs:"
 _BAREWORD_KEY = re.compile(r'([{,])(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*):')
 
 
