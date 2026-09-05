@@ -36,5 +36,13 @@ env/
 Thumbs.db
 .DS_Store
 
-# Config local de Claude Code (skills, settings) — no es parte de la app
-.claude/
+# Claude Code: se versiona solo la automatización propia del proyecto
+# (hooks, agentes y skills de este repo). El bundle de skills global no.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/agents/
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/release/
+!.claude/skills/verify-scrapers/
