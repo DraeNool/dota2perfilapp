@@ -36,8 +36,10 @@ def build_hero_grid(steam_id3: str, *, meta_meta: dict, favorites_limit: int,
         log_fn(f"  Últimas 20: {recent_msg}")
         log_fn("  Descargando Meta de Dota2ProTracker...")
 
-    role_heroes, roles_msg = dota2protracker.fetch_meta_roles(grids_ttl)
-    updated_meta_meta = dota2protracker.apply_role_heroes(meta_meta, role_heroes) if role_heroes else meta_meta
+    role_heroes, patch, roles_msg = dota2protracker.fetch_meta_roles(grids_ttl)
+    updated_meta_meta = (
+        dota2protracker.apply_role_heroes(meta_meta, role_heroes, patch) if role_heroes else meta_meta
+    )
     if log_fn:
         log_fn(f"  Meta Meta: {roles_msg}")
 

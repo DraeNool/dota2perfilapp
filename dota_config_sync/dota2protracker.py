@@ -14,6 +14,7 @@ GRIDS_URL = "https://dota2protracker.com/meta-hero-grids"
 
 _GRIDS_MARKER = "matches:{configs:"
 _ROLES_MARKER = 'roles:[{position:"pos 1"'
+_PATCH_VERSION = re.compile(r'patch:\{version:"([^"]+)"')
 _BAREWORD_KEY = re.compile(r'([{,])(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*):')
 _BARE_DECIMAL = re.compile(r'([:,\[])(-?)\.(\d)')
 _POS_IN_NAME = re.compile(r'pos\s*([1-5])', re.IGNORECASE)
@@ -116,47 +117,59 @@ def parse_meta_roles_html(html: str) -> dict[str, list[int]]:
     return out
 
 
-def fetch_meta_roles(ttl: int) -> tuple[dict[str, list[int]], str]:
-    """Descarga (o reutiliza de caché) el top de héroes por posición ("pos 1".."pos 5")."""
+def parse_patch_version(html: str) -> str | None:
+    """Versión del parche que el sitio declara para su ranking (p.ej. "7.41f")."""
+    m = _PATCH_VERSION.search(html)
+    return m.group(1) if m else None
+
+
+def fetch_meta_roles(ttl: int) -> tuple[dict[str, list[int]], str | None, str]:
+    """
+    Descarga (o reutiliza de caché) el top de héroes por posición ("pos 1".."pos 5").
+
+    Devuelve (roles, versión del parche o None, mensaje de estado).
+    """
     cached = cache.get(HOME_URL, ttl)
-    if cached is not None:
-        return cached, f"{sum(len(v) for v in cached.values())} héroes Meta (caché)"
+    if isinstance(cached, dict) and "roles" in cached:
+        roles, patch = cached["roles"], cached.get("patch")
+        return roles, patch, f"{sum(len(v) for v in roles.values())} héroes Meta {patch or ''} (caché)"
 
     try:
         status, html = http.get_text(HOME_URL, timeout=20)
     except http.requests.exceptions.Timeout:
-        return {}, "Timeout al conectar con Dota2ProTracker"
+        return {}, None, "Timeout al conectar con Dota2ProTracker"
     except http.requests.RequestException as e:
-        return {}, f"Error de red: {e}"
+        return {}, None, f"Error de red: {e}"
 
     if status != 200 or not html:
-        return {}, f"Dota2ProTracker respondió {status}"
+        return {}, None, f"Dota2ProTracker respondió {status}"
 
     try:
         roles = parse_meta_roles_html(html)
     except ValueError as e:
         log.warning("No se pudo parsear el ranking por posición: %s", e)
-        return {}, f"No se pudo leer el Meta de Dota2ProTracker: {e}"
+        return {}, None, f"No se pudo leer el Meta de Dota2ProTracker: {e}"
 
-    cache.set(HOME_URL, roles)
-    return roles, f"{sum(len(v) for v in roles.values())} héroes Meta"
+    patch = parse_patch_version(html)
+    cache.set(HOME_URL, {"roles": roles, "patch": patch})
+    return roles, patch, f"{sum(len(v) for v in roles.values())} héroes Meta {patch or ''}".rstrip()
 
 
-def apply_role_heroes(meta_meta: dict, role_heroes: dict[str, list[int]]) -> dict:
+def apply_role_heroes(meta_meta: dict, role_heroes: dict[str, list[int]],
+                      patch: str | None = None) -> dict:
     """
     Copia meta_meta reemplazando los hero_ids de las categorías cuyo nombre contiene
     "POS N" (N=1..5) por el ranking Meta actual de esa posición. Posiciones/tamaños de
     las cajas y categorías sin "POS N" en el nombre (p.ej. COMFORT) quedan intactas.
+    Con `patch`, el nombre de la config lleva la versión con la que se generó.
     """
-    updated = {
-        "config_name": meta_meta.get("config_name", "Meta Meta"),
-        "categories": [dict(cat) for cat in meta_meta.get("categories", [])],
-    }
-    for cat in updated["categories"]:
+    name = meta_meta.get("config_name", "Meta Meta")
+    categories: list[dict] = [dict(cat) for cat in meta_meta.get("categories", [])]
+    for cat in categories:
         m = _POS_IN_NAME.search(cat.get("category_name", ""))
         if not m:
             continue
         pos_key = f"pos {m.group(1)}"
         if pos_key in role_heroes:
             cat["hero_ids"] = role_heroes[pos_key]
-    return updated
+    return {"config_name": f"{name} {patch}" if patch else name, "categories": categories}

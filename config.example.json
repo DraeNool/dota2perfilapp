@@ -14,7 +14,7 @@
       {"category_name": "SOFT / POS 4", "x_position": 833.913086, "y_position": 0.0, "width": 304.347839, "height": 295.652191, "hero_ids": [14, 71, 22, 105, 62, 88, 74]},
       {"category_name": "MID / POS 2", "x_position": 474.782623, "y_position": 0.0, "width": 357.391327, "height": 169.565216, "hero_ids": [74, 128, 25, 13, 90, 34, 76]},
       {"category_name": "CARRY / POS 1", "x_position": 0.869565, "y_position": 300.0, "width": 296.521759, "height": 163.478271, "hero_ids": [6, 41, 12, 8, 54, 93, 67]},
-      {"category_name": "COMFORT", "x_position": 310.434784, "y_position": 286.086975, "width": 389.565216, "height": 253.913055, "hero_ids": [92, 23, 97, 38, 7, 98, 55, 107]},
+      {"category_name": "COMFORT", "x_position": 310.434784, "y_position": 286.086975, "width": 389.565216, "height": 253.913055, "hero_ids": [92, 23, 97, 38, 7, 98, 55, 107, 155]},
       {"category_name": "SUPP / POS 5", "x_position": 832.173950, "y_position": 295.652191, "width": 335.652191, "height": 185.217392, "hero_ids": [14, 31, 87, 86, 27, 75, 128]}
     ]
   }

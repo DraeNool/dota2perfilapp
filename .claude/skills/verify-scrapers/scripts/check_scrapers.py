@@ -72,6 +72,8 @@ def main() -> int:
             continue
 
         print("  OK")
+        if marker == "_ROLES_MARKER":
+            print(f"    parche: {d2pt.parse_patch_version(html) or 'NO DETECTADO'}")
         for line in summarize(parsed):
             print(f"    {line}")
 

@@ -30,7 +30,7 @@ DEFAULT_META_META = {
         {"category_name": "CARRY / POS 1", "x_position": 0.869565, "y_position": 300.0,
          "width": 296.521759, "height": 163.478271, "hero_ids": [6, 41, 12, 8, 54, 93, 67]},
         {"category_name": "COMFORT", "x_position": 310.434784, "y_position": 286.086975,
-         "width": 389.565216, "height": 253.913055, "hero_ids": [92, 23, 97, 38, 7, 98, 55, 107]},
+         "width": 389.565216, "height": 253.913055, "hero_ids": [92, 23, 97, 38, 7, 98, 55, 107, 155]},
         {"category_name": "SUPP / POS 5", "x_position": 832.173950, "y_position": 295.652191,
          "width": 335.652191, "height": 185.217392, "hero_ids": [14, 31, 87, 86, 27, 75, 128]},
     ],

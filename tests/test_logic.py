@@ -195,7 +195,8 @@ def test_parse_meta_hero_grids_html_unbalanced_brackets_raises():
 
 
 _D2PT_ROLES_FIXTURE = (
-    'garbage... roles:[{position:"pos 1",roleName:"Carry",icon:"/x.svg",'
+    'garbage... patch:{version:"7.41e",released_at:1785457681,period:"8"},'
+    'roles:[{position:"pos 1",roleName:"Carry",icon:"/x.svg",'
     'heroes:[{hero_id:21,hero_name:"Windranger",win_rate:.527},'
     '{hero_id:8,hero_name:"Juggernaut",win_rate:-.518}],hasMore:false},'
     '{position:"pos 4",roleName:"Support",icon:"/y.svg",'
@@ -212,6 +213,17 @@ def test_parse_meta_roles_html_extracts_positions_and_fixes_bare_decimals():
 def test_parse_meta_roles_html_missing_marker_raises():
     with pytest.raises(ValueError):
         dota2protracker.parse_meta_roles_html("<html>no roles here</html>")
+
+
+def test_parse_patch_version():
+    assert dota2protracker.parse_patch_version(_D2PT_ROLES_FIXTURE) == "7.41e"
+    assert dota2protracker.parse_patch_version("<html>sin parche</html>") is None
+
+
+def test_apply_role_heroes_appends_patch_to_config_name():
+    meta_meta = {"config_name": "Meta Meta", "categories": []}
+    assert dota2protracker.apply_role_heroes(meta_meta, {}, "7.41f")["config_name"] == "Meta Meta 7.41f"
+    assert dota2protracker.apply_role_heroes(meta_meta, {}, None)["config_name"] == "Meta Meta"
 
 
 def test_apply_role_heroes_replaces_pos_categories_keeps_comfort_and_layout():
