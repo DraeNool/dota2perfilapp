@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import time
 from typing import cast
 
 from . import cache, http
@@ -153,6 +154,16 @@ def fetch_meta_roles(ttl: int) -> tuple[dict[str, list[int]], str | None, str]:
     patch = parse_patch_version(html)
     cache.set(HOME_URL, {"roles": roles, "patch": patch})
     return roles, patch, f"{sum(len(v) for v in roles.values())} héroes Meta {patch or ''}".rstrip()
+
+
+def cached_meta_status() -> tuple[str | None, float | None]:
+    """(parche, edad en segundos) del ranking Meta en caché; (None, None) si nunca se descargó."""
+    info = cache.peek(HOME_URL)
+    if not info:
+        return None, None
+    value, ts = info
+    patch = value.get("patch") if isinstance(value, dict) else None
+    return patch, max(0.0, time.time() - ts)
 
 
 def apply_role_heroes(meta_meta: dict, role_heroes: dict[str, list[int]],

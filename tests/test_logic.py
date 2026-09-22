@@ -220,6 +220,26 @@ def test_parse_patch_version():
     assert dota2protracker.parse_patch_version("<html>sin parche</html>") is None
 
 
+def test_cached_meta_status_reads_patch_and_age(monkeypatch, tmp_path):
+    from dota_config_sync import cache
+
+    monkeypatch.setattr(cache, "cache_dir", lambda: tmp_path)
+    assert dota2protracker.cached_meta_status() == (None, None)
+    cache.set(dota2protracker.HOME_URL, {"roles": {"pos 1": [1]}, "patch": "7.41f"})
+    patch, age = dota2protracker.cached_meta_status()
+    assert patch == "7.41f"
+    assert age is not None and 0 <= age < 5
+
+
+def test_age_text_buckets():
+    from dota_config_sync.app import _age_text
+
+    assert _age_text(5) == "hace un momento"
+    assert _age_text(150) == "hace 2 min"
+    assert _age_text(7200) == "hace 2 h"
+    assert _age_text(3 * 86400) == "hace 3 día(s)"
+
+
 def test_apply_role_heroes_appends_patch_to_config_name():
     meta_meta = {"config_name": "Meta Meta", "categories": []}
     assert dota2protracker.apply_role_heroes(meta_meta, {}, "7.41f")["config_name"] == "Meta Meta 7.41f"

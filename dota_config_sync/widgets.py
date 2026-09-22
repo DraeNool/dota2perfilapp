@@ -40,7 +40,7 @@ class AccountCard(ctk.CTkFrame):
         self._build()
 
     def _build(self):
-        badge_txt = "● Cuenta principal" if self.role == "source" else "● Cuenta secundaria"
+        badge_txt = "● Origen  (se copia de aquí)" if self.role == "source" else "● Destino  (se sobrescribe)"
         badge_bg = C["badge_src"] if self.role == "source" else C["badge_dst"]
         badge_fg = C["accent"] if self.role == "source" else C["dst"]
         ctk.CTkLabel(

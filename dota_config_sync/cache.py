@@ -33,6 +33,19 @@ def get(key: str, ttl_seconds: int):
     return payload.get("value")
 
 
+def peek(key: str):
+    """(valor, timestamp) aunque haya expirado; None si no existe o no se puede leer."""
+    path = _key_to_file(key)
+    with _LOCK:
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+    return payload.get("value"), float(payload.get("ts", 0))
+
+
 def set(key: str, value) -> None:
     """Guarda un valor JSON-serializable con marca de tiempo."""
     path = _key_to_file(key)

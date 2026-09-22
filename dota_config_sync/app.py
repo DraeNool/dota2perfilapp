@@ -2,6 +2,7 @@
 
 import concurrent.futures
 import logging
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -9,7 +10,7 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from . import __version__, autoexec, fileops, hero_grid, http, opendota, steam
+from . import __version__, autoexec, dota2protracker, fileops, hero_grid, http, opendota, steam
 from .config import AppConfig
 from .paths import resource_path
 from .theme import C, download_avatar
@@ -22,11 +23,25 @@ log = logging.getLogger(__name__)
 LOG_MAX_LINES = 500
 
 
+ALL_ACCOUNTS_LABEL = "  ★ Todas las cuentas con Dota 2"
+
+
 def _names_preview(names: list[str], limit: int = 8) -> str:
     """Resumen legible de una lista de nombres (con '...' si se trunca)."""
     if not names:
         return "ninguno"
     return ", ".join(names[:limit]) + ("..." if len(names) > limit else "")
+
+
+def _age_text(seconds: float) -> str:
+    s = int(seconds)
+    if s < 60:
+        return "hace un momento"
+    if s < 3600:
+        return f"hace {s // 60} min"
+    if s < 86400:
+        return f"hace {s // 3600} h"
+    return f"hace {s // 86400} día(s)"
 
 
 def fetch_account_profile(acc: dict, cfg: AppConfig) -> dict:
@@ -113,7 +128,7 @@ class App(ctk.CTk):
         self.card_dst = AccountCard(row, role="target", on_change=self._on_dst_change)
         self.card_dst.grid(row=0, column=2, sticky="ew", padx=(8, 0))
 
-        self._lbl(self.scroll, "ACCIÓN", pady=(20, 6))
+        self._lbl(self.scroll, "COPIAR CONFIGURACIÓN  (carpeta 570: origen → destino)", pady=(20, 6))
         sync_card = ctk.CTkFrame(
             self.scroll, fg_color=C["bg2"], corner_radius=12, border_width=1, border_color=C["src"],
         )
@@ -122,25 +137,17 @@ class App(ctk.CTk):
         sync_inner.pack(fill="x", padx=16, pady=16)
 
         self.op_desc = ctk.CTkLabel(
-            sync_inner, text="Selecciona las dos cuentas para ver la operación",
+            sync_inner, text="Selecciona origen y destino para ver la operación",
             font=ctk.CTkFont(size=12), text_color=C["txt2"], anchor="w", wraplength=760, justify="left",
         )
         self.op_desc.pack(fill="x", pady=(0, 12))
 
         self.btn_replace = ctk.CTkButton(
-            sync_inner, text="↻   Reemplazar carpeta 570 completa", height=46, corner_radius=10,
+            sync_inner, text="↻   Reemplazar carpeta 570", height=46, corner_radius=10,
             fg_color=C["accent2"], hover_color=C["accent3"], text_color="#ffffff",
             font=ctk.CTkFont(size=14, weight="bold"), command=self._do_replace_570,
         )
         self.btn_replace.pack(fill="x")
-
-        self.btn_grid = ctk.CTkButton(
-            sync_inner, text="🧩   Generar Hero Grid  (Meta Meta + Favoritos + D2PT)", height=46, corner_radius=10,
-            fg_color="transparent", border_width=2, border_color=C["accent2"],
-            hover_color=C["badge_src"], text_color=C["accent"],
-            font=ctk.CTkFont(size=14, weight="bold"), command=self._do_generate_hero_grid,
-        )
-        self.btn_grid.pack(fill="x", pady=(10, 0))
 
         self.progress = ctk.CTkProgressBar(sync_inner, progress_color=C["accent"], fg_color=C["card"])
         self.progress.set(0)
@@ -151,9 +158,20 @@ class App(ctk.CTk):
         )
         self.sync_result.pack(fill="x", pady=(10, 0))
 
+        self._build_hero_grid_section()
         self._build_autoexec_section()
 
-        self._lbl(self.scroll, "REGISTRO DE ACTIVIDAD", pady=(20, 6))
+        log_hdr = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        log_hdr.pack(fill="x", pady=(20, 6))
+        ctk.CTkLabel(
+            log_hdr, text="REGISTRO DE ACTIVIDAD", font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=C["txt3"], anchor="w",
+        ).pack(side="left")
+        ctk.CTkButton(
+            log_hdr, text="Copiar", width=70, height=24, fg_color="transparent",
+            border_width=1, border_color=C["border"], text_color=C["txt2"], hover_color=C["bg2"],
+            font=ctk.CTkFont(size=11), command=self._copy_log,
+        ).pack(side="right")
         self.log = ctk.CTkTextbox(
             self.scroll, height=240, fg_color=C["card"], border_color=C["border"],
             border_width=1, corner_radius=10, font=ctk.CTkFont(size=11, family="Courier"),
@@ -336,6 +354,7 @@ class App(ctk.CTk):
 
         self.card_src.load_accounts(accounts)
         self.card_dst.load_accounts(accounts)
+        self._load_grid_targets()
         self.status.set(f"{len(accounts)} cuenta(s) encontradas", "ok")
         self.status.set_right(r"userdata\...\570")
 
@@ -418,6 +437,7 @@ class App(ctk.CTk):
             if card.selected:
                 new_name = f"  {card.selected['name']}"
                 card.combo.set(new_name if new_name in names else old)
+        self._load_grid_targets()
 
     # ── Callbacks de selección ───────────────────────────────────────────────
     def _on_src_change(self, acc: dict):
@@ -443,7 +463,7 @@ class App(ctk.CTk):
                 text_color=C["txt"],
             )
         else:
-            self.op_desc.configure(text="Selecciona las dos cuentas para ver la operación", text_color=C["txt2"])
+            self.op_desc.configure(text="Selecciona origen y destino para ver la operación", text_color=C["txt2"])
 
     # ── Reemplazar 570 ───────────────────────────────────────────────────────
     def _do_replace_570(self):
@@ -520,7 +540,7 @@ class App(ctk.CTk):
         self.sync_result.configure(text=f"Copiando {copied}/{total}: {rel}", text_color=C["txt2"])
 
     def _on_replace_done(self, ok, copied, total, src, dst, backup_dir, error):
-        self.btn_replace.configure(state="normal", text="↻  REEMPLAZAR CARPETA 570 COMPLETA")
+        self.btn_replace.configure(state="normal", text="↻   Reemplazar carpeta 570")
         self.btn_grid.configure(state="normal")
         if ok:
             self.progress.set(1)
@@ -543,69 +563,202 @@ class App(ctk.CTk):
         self.after(1500, self.progress.pack_forget)
 
     # ── Hero Grid ────────────────────────────────────────────────────────────
+    def _build_hero_grid_section(self):
+        self._lbl(self.scroll, "HERO GRID  (Meta Meta + Favoritos + Meta D2PT)", pady=(20, 6))
+        box = ctk.CTkFrame(self.scroll, fg_color=C["bg2"], corner_radius=12, border_width=1, border_color=C["accent2"])
+        box.pack(fill="x")
+        inner = ctk.CTkFrame(box, fg_color="transparent")
+        inner.pack(fill="x", padx=16, pady=16)
+        inner.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            inner,
+            text="Genera hero_grid_config.json con el meta actual y los favoritos de la cuenta elegida. "
+                 "No depende de origen/destino.",
+            font=ctk.CTkFont(size=12), text_color=C["txt2"], anchor="w", wraplength=760, justify="left",
+        ).grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+
+        ctk.CTkLabel(inner, text="Cuenta", font=ctk.CTkFont(size=12), text_color=C["txt2"]).grid(
+            row=1, column=0, padx=(0, 8),
+        )
+        self.grid_combo = ctk.CTkComboBox(
+            inner, values=["  (cargando cuentas...)"], fg_color=C["card"], border_color=C["border"],
+            button_color=C["accent2"], button_hover_color=C["accent"], text_color=C["txt"],
+            dropdown_fg_color=C["bg2"], dropdown_hover_color=C["card"], dropdown_text_color=C["txt"],
+            font=ctk.CTkFont(size=13),
+        )
+        self.grid_combo.set("  (cargando cuentas...)")
+        self.grid_combo.grid(row=1, column=1, sticky="ew", padx=(0, 8))
+
+        self.btn_grid = ctk.CTkButton(
+            inner, text="🧩  Generar Hero Grid", width=200, height=34, corner_radius=10,
+            fg_color="transparent", border_width=2, border_color=C["accent2"],
+            hover_color=C["badge_src"], text_color=C["accent"],
+            font=ctk.CTkFont(size=13, weight="bold"), command=self._do_generate_hero_grid,
+        )
+        self.btn_grid.grid(row=1, column=2)
+
+        self.meta_status = ctk.CTkLabel(
+            inner, text="", font=ctk.CTkFont(size=11), text_color=C["txt3"], anchor="w",
+        )
+        self.meta_status.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+
+        self.grid_progress = ctk.CTkProgressBar(inner, progress_color=C["accent"], fg_color=C["card"])
+        self.grid_progress.set(0)
+
+        result_row = ctk.CTkFrame(inner, fg_color="transparent")
+        result_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        result_row.columnconfigure(0, weight=1)
+        self.grid_result = ctk.CTkLabel(
+            result_row, text="", font=ctk.CTkFont(size=11), text_color=C["txt2"],
+            anchor="w", wraplength=620, justify="left",
+        )
+        self.grid_result.grid(row=0, column=0, sticky="ew")
+        self.btn_open_grid = ctk.CTkButton(
+            result_row, text="📂  Abrir carpeta", width=130, height=30, fg_color="transparent",
+            border_width=1, border_color=C["border"], text_color=C["txt2"], hover_color=C["bg2"],
+            font=ctk.CTkFont(size=11), command=self._open_grid_folder, state="disabled",
+        )
+        self.btn_open_grid.grid(row=0, column=1, padx=(8, 0), sticky="n")
+
+        self._grid_out_dir: Path | None = None
+        self._refresh_meta_status()
+
+    def _grid_accounts(self) -> list[dict]:
+        return [a for a in self.accounts if a["has_dota"]]
+
+    def _load_grid_targets(self):
+        names = [f"  {a['name']}" for a in self._grid_accounts()]
+        values = [ALL_ACCOUNTS_LABEL, *names] if names else ["  (sin cuentas con Dota 2)"]
+        self.grid_combo.configure(values=values)
+        if self.grid_combo.get() in values:
+            return
+        main = next((a for a in self._grid_accounts() if a["steam_id64"] == self.cfg.preferred_main_id64), None)
+        self.grid_combo.set(f"  {main['name']}" if main else values[1] if names else values[0])
+
+    def _grid_targets(self) -> list[dict]:
+        value = self.grid_combo.get()
+        if value == ALL_ACCOUNTS_LABEL:
+            return self._grid_accounts()
+        acc = next((a for a in self._grid_accounts() if a["name"] == value.strip()), None)
+        return [acc] if acc else []
+
+    def _refresh_meta_status(self):
+        patch, age = dota2protracker.cached_meta_status()
+        if age is None:
+            self.meta_status.configure(
+                text="Meta D2PT: todavía no descargado — se baja al generar.", text_color=C["txt3"],
+            )
+            return
+        stale = age > 86400
+        self.meta_status.configure(
+            text=f"Meta D2PT: parche {patch or 'desconocido'}  •  descargado {_age_text(age)}"
+                 + ("  •  se actualizará al generar" if stale else ""),
+            text_color=C["amber"] if stale else C["txt3"],
+        )
+
     def _do_generate_hero_grid(self):
-        src, dst = self.card_src.selected, self.card_dst.selected
-        if not src or not dst:
-            messagebox.showwarning("Faltan cuentas", "Selecciona origen y destino.")
+        targets = self._grid_targets()
+        if not targets:
+            messagebox.showwarning("Sin cuenta", "Selecciona una cuenta con Dota 2 instalado.")
             return
 
-        self.btn_grid.configure(state="disabled", text="⏳  Generando Hero Grid...")
+        if steam.is_dota_running() and not messagebox.askyesno(
+            "Dota 2 está abierto",
+            "Dota 2 parece estar en ejecución. Steam Cloud puede sobrescribir el hero grid "
+            "al cerrar el juego.\n\nSe recomienda cerrar Dota antes de continuar.\n\n"
+            "¿Continuar de todos modos?",
+        ):
+            return
+
+        self.btn_grid.configure(state="disabled", text="⏳  Generando...")
         self.btn_replace.configure(state="disabled")
-        self.status.set("Consultando OpenDota...", "loading")
-        self.sync_result.configure(
-            text="Generando config: Meta Meta + Favoritos + Meta D2PT...",
-            text_color=C["amber"],
+        self.btn_open_grid.configure(state="disabled")
+        self.grid_progress.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        self.grid_progress.set(0)
+        self.status.set("Consultando OpenDota y Dota2ProTracker...", "loading")
+        self.grid_result.configure(
+            text=f"Generando {len(targets)} hero grid(s)...", text_color=C["amber"],
         )
-        self._log(f'\n── Hero Grid: fuente de favoritos {dst["name"]} ──')
-        threading.Thread(target=self._hero_grid_worker, args=(dst,), daemon=True).start()
+        threading.Thread(target=self._hero_grid_worker, args=(targets,), daemon=True).start()
 
-    def _hero_grid_worker(self, dst: dict):
-        try:
-            payload, perf_names, recent_names, status_msg = hero_grid.build_hero_grid(
-                dst["steam_id3"], meta_meta=self.cfg.meta_meta,
-                favorites_limit=self.cfg.favorites_limit, recent_limit=self.cfg.recent_matches_limit,
-                ttl=self.cfg.cache_ttl_seconds, grids_ttl=self.cfg.meta_grids_ttl_seconds,
-                log_fn=self._log_async,
+    def _hero_grid_worker(self, targets: list[dict]):
+        results = []
+        total = len(targets)
+        for i, acc in enumerate(targets, 1):
+            self._log_async(f'\n── Hero Grid {i}/{total}: {acc["name"]} ──')
+            self._set_status_async(f'Hero Grid {i}/{total}: {acc["name"]}...', "loading")
+            try:
+                payload, perf_names, recent_names, status_msg = hero_grid.build_hero_grid(
+                    acc["steam_id3"], meta_meta=self.cfg.meta_meta,
+                    favorites_limit=self.cfg.favorites_limit, recent_limit=self.cfg.recent_matches_limit,
+                    ttl=self.cfg.cache_ttl_seconds, grids_ttl=self.cfg.meta_grids_ttl_seconds,
+                    log_fn=self._log_async,
+                )
+                out_path = hero_grid.save_hero_grid(acc["path"] / "570", payload)
+                self._log_async(f"✔ Guardado en {out_path}")
+                self._log_async(f'  Performance ({len(perf_names)}): {", ".join(perf_names) or "ninguno"}')
+                self._log_async(f'  Últimas 20 ({len(recent_names)}): {", ".join(recent_names) or "ninguno"}')
+                results.append({
+                    "acc": acc, "out": out_path, "perf": perf_names, "recent": recent_names,
+                    "status": status_msg, "error": None,
+                })
+            except Exception as e:  # noqa: BLE001 — una cuenta fallida no frena las demás
+                log.exception("Error generando hero grid para %s", acc.get("name"))
+                self._log_async(f'✘ {acc["name"]}: {e}')
+                results.append({"acc": acc, "error": str(e)})
+            self.after(0, self.grid_progress.set, i / total)
+        self.after(0, self._on_hero_grid_done, results)
+
+    def _on_hero_grid_done(self, results: list[dict]):
+        self.btn_grid.configure(state="normal", text="🧩  Generar Hero Grid")
+        self.btn_replace.configure(state="normal")
+        self.after(1500, self.grid_progress.grid_forget)
+        self._refresh_meta_status()
+
+        ok = [r for r in results if not r["error"]]
+        failed = [r for r in results if r["error"]]
+        if ok:
+            self._grid_out_dir = ok[-1]["out"].parent
+            self.btn_open_grid.configure(state="normal")
+
+        if len(results) == 1:
+            r = results[0]
+            if r["error"]:
+                self.status.set("Error generando Hero Grid", "error")
+                self.grid_result.configure(text=f"Error: {r['error']}", text_color=C["red"])
+                messagebox.showerror("Error", f"No se pudo generar el Hero Grid:\n\n{r['error']}")
+                return
+            perf_txt, recent_txt = _names_preview(r["perf"]), _names_preview(r["recent"])
+            self.status.set("✔ Hero Grid generado", "ok")
+            self.grid_result.configure(
+                text=f"Guardado en:\n{r['out']}\n\n{r['status']}\n\nPerformance: {perf_txt}\nÚltimas 20: {recent_txt}",
+                text_color=C["green"],
             )
-            out_path = hero_grid.save_hero_grid(dst["path"] / "570", payload)
-            self._log_async(f'✔ Favoritos performance ({len(perf_names)}): {", ".join(perf_names) or "ninguno"}')
-            self._log_async(f'✔ Últimas 20 ({len(recent_names)}): {", ".join(recent_names) or "ninguno"}')
-            self.after(0, self._on_hero_grid_done, out_path, perf_names, recent_names, status_msg)
-        except Exception as e:  # noqa: BLE001
-            log.exception("Error generando hero grid")
-            self.after(0, self._on_hero_grid_error, str(e))
+            messagebox.showinfo(
+                "Hero Grid generado",
+                f"hero_grid_config.json guardado en:\n{r['out']}\n\n{r['status']}\n\n"
+                f"Favoritos por performance: {perf_txt}\nÚltimas 20 partidas: {recent_txt}\n\n"
+                f"El archivo anterior quedó como hero_grid_config_backup.json.",
+            )
+            return
 
-    def _on_hero_grid_done(self, out_path: Path, perf_names: list[str],
-                           recent_names: list[str], status_msg: str):
-        self.btn_grid.configure(state="normal", text="🧩  GENERAR HERO GRID  (Meta Meta + Favoritos + D2PT)")
-        self.btn_replace.configure(state="normal")
-        self.status.set("✔ Hero Grid generado", "ok")
-
-        perf_txt = _names_preview(perf_names)
-        recent_txt = _names_preview(recent_names)
-
-        self.sync_result.configure(
-            text=(
-                f"Hero Grid guardado en:\n{out_path}\n\n{status_msg}\n\n"
-                f"Performance: {perf_txt}\nÚltimas 20: {recent_txt}"
-            ),
-            text_color=C["green"],
+        lines = [f'✔ {r["acc"]["name"]}' for r in ok] + [f'✘ {r["acc"]["name"]}: {r["error"]}' for r in failed]
+        summary = f"{len(ok)}/{len(results)} hero grids generados"
+        self.status.set(("✔ " if not failed else "⚠ ") + summary, "ok" if not failed else "error")
+        self.grid_result.configure(
+            text=summary + "\n" + "\n".join(lines), text_color=C["green"] if not failed else C["amber"],
         )
-        self._log(f"✔ Hero Grid guardado en {out_path}")
-        messagebox.showinfo(
-            "Hero Grid generado",
-            f"hero_grid_config.json guardado en:\n{out_path}\n\n{status_msg}\n\n"
-            f"Favoritos por performance: {perf_txt}\nÚltimas 20 partidas: {recent_txt}\n\n"
-            f"El archivo anterior quedó como hero_grid_config_backup.json.",
-        )
+        messagebox.showinfo("Hero Grids", summary + "\n\n" + "\n".join(lines))
 
-    def _on_hero_grid_error(self, error: str):
-        self.btn_grid.configure(state="normal", text="🧩  GENERAR HERO GRID  (Meta Meta + Favoritos + D2PT)")
-        self.btn_replace.configure(state="normal")
-        self.status.set("Error generando Hero Grid", "error")
-        self.sync_result.configure(text=f"Error: {error}", text_color=C["red"])
-        self._log(f"✘ Error Hero Grid: {error}")
-        messagebox.showerror("Error", f"No se pudo generar el Hero Grid:\n\n{error}")
+    def _open_grid_folder(self):
+        if self._grid_out_dir and self._grid_out_dir.exists():
+            os.startfile(self._grid_out_dir)  # noqa: S606 — abre el Explorador sobre una ruta local propia
+
+    def _copy_log(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.log.get("1.0", "end-1c"))
+        self.status.set("Registro copiado al portapapeles", "info")
 
     def on_close(self):
         self.destroy()
