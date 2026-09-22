@@ -74,6 +74,31 @@ def hero_id_lookup() -> dict[str, int]:
     return {_normalize_hero_name(name): hid for hid, name in get_hero_map().items()}
 
 
+def resolve_hero_names(text: str) -> tuple[list[int], list[str]]:
+    """
+    Convierte "Dark Seer, Largo, 55" en ([55, 155], []) usando el hero map.
+
+    Acepta nombres (sin distinguir mayúsculas) o ids numéricos; devuelve
+    (ids sin duplicados en orden, tokens que no se reconocieron).
+    """
+    lookup = hero_id_lookup()
+    hero_map = get_hero_map()
+    ids: list[int] = []
+    unknown: list[str] = []
+    for token in text.replace(";", ",").replace("\n", ",").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        hid = _coerce_hero_id(token)
+        if hid is None or hid not in hero_map:
+            hid = lookup.get(_normalize_hero_name(token))
+        if hid is None:
+            unknown.append(token)
+        elif hid not in ids:
+            ids.append(hid)
+    return ids, unknown
+
+
 # ── Perfil ───────────────────────────────────────────────────────────────────
 def fetch_profile(steam_id3: str, ttl: int) -> dict:
     """Rango, winrate competitivo estimado, último héroe/resultado/KDA."""

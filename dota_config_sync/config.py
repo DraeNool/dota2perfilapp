@@ -12,13 +12,14 @@ import json
 import logging
 import os
 from copy import deepcopy
+from typing import Any
 
 from .paths import config_path
 
 log = logging.getLogger(__name__)
 
 # Plantilla fija "Meta Meta" usada por defecto si el usuario no la personaliza.
-DEFAULT_META_META = {
+DEFAULT_META_META: dict[str, Any] = {
     "config_name": "Meta Meta",
     "categories": [
         {"category_name": "OFFLANE / TIER S - A  / POS 3", "x_position": 0.0, "y_position": 0.0,
@@ -120,3 +121,23 @@ class AppConfig:
     @property
     def meta_meta(self) -> dict:
         return self._data.get("meta_meta", DEFAULT_META_META)
+
+    def _comfort_category(self) -> dict[str, Any] | None:
+        categories: list[dict[str, Any]] = self.meta_meta.get("categories", [])
+        for cat in categories:
+            if "comfort" in str(cat.get("category_name", "")).lower():
+                return cat
+        return None
+
+    @property
+    def comfort_hero_ids(self) -> list[int]:
+        cat = self._comfort_category()
+        return list(cat.get("hero_ids", [])) if cat else []
+
+    def set_comfort_hero_ids(self, hero_ids: list[int]) -> None:
+        cat = self._comfort_category()
+        if cat is None:
+            template = next(c for c in DEFAULT_META_META["categories"] if c["category_name"] == "COMFORT")
+            cat = deepcopy(template)
+            self.meta_meta.setdefault("categories", []).append(cat)
+        cat["hero_ids"] = list(hero_ids)

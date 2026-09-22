@@ -231,6 +231,26 @@ def test_cached_meta_status_reads_patch_and_age(monkeypatch, tmp_path):
     assert age is not None and 0 <= age < 5
 
 
+def test_resolve_hero_names_accepts_names_ids_and_reports_unknown(monkeypatch):
+    monkeypatch.setattr(opendota, "get_hero_map", lambda: {55: "Dark Seer", 155: "Largo", 14: "Pudge"})
+    ids, unknown = opendota.resolve_hero_names("dark seer, Largo; 14, Pudge, Nadie, 999")
+    assert ids == [55, 155, 14]
+    assert unknown == ["Nadie", "999"]
+
+
+def test_config_comfort_roundtrip_keeps_layout_and_other_categories():
+    cfg = AppConfig()
+    before = {c["category_name"]: dict(c) for c in cfg.meta_meta["categories"]}
+    cfg.set_comfort_hero_ids([1, 2, 3])
+    assert cfg.comfort_hero_ids == [1, 2, 3]
+    after = {c["category_name"]: c for c in cfg.meta_meta["categories"]}
+    assert after["COMFORT"]["x_position"] == before["COMFORT"]["x_position"]
+    assert after["CARRY / POS 1"]["hero_ids"] == before["CARRY / POS 1"]["hero_ids"]
+    from dota_config_sync.config import DEFAULT_META_META
+
+    assert 1 not in next(c for c in DEFAULT_META_META["categories"] if c["category_name"] == "COMFORT")["hero_ids"]
+
+
 def test_age_text_buckets():
     from dota_config_sync.app import _age_text
 

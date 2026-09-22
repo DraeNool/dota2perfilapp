@@ -355,6 +355,7 @@ class App(ctk.CTk):
         self.card_src.load_accounts(accounts)
         self.card_dst.load_accounts(accounts)
         self._load_grid_targets()
+        self._preload_hero_map()
         self.status.set(f"{len(accounts)} cuenta(s) encontradas", "ok")
         self.status.set_right(r"userdata\...\570")
 
@@ -621,6 +622,38 @@ class App(ctk.CTk):
         )
         self.btn_open_grid.grid(row=0, column=1, padx=(8, 0), sticky="n")
 
+        ctk.CTkLabel(
+            inner, text="HÉROES COMFORT  (tu lista fija dentro de Meta Meta — nombres separados por coma)",
+            font=ctk.CTkFont(size=10, weight="bold"), text_color=C["txt3"], anchor="w",
+        ).grid(row=5, column=0, columnspan=3, sticky="ew", pady=(16, 4))
+
+        self.comfort_entry = ctk.CTkEntry(
+            inner, placeholder_text="Cargando héroes...", fg_color=C["card"], border_color=C["border"],
+            text_color=C["txt"], font=ctk.CTkFont(size=12),
+        )
+        self.comfort_entry.grid(row=6, column=0, columnspan=2, sticky="ew", padx=(0, 8))
+        ctk.CTkButton(
+            inner, text="Guardar comfort", width=200, height=30, fg_color=C["accent2"], hover_color=C["accent"],
+            text_color=C["txt"], font=ctk.CTkFont(size=12, weight="bold"), command=self._save_comfort,
+        ).grid(row=6, column=2)
+
+        ctk.CTkLabel(inner, text="Agregar", font=ctk.CTkFont(size=12), text_color=C["txt2"]).grid(
+            row=7, column=0, padx=(0, 8), pady=(6, 0),
+        )
+        self.comfort_combo = ctk.CTkComboBox(
+            inner, values=["  (cargando héroes...)"], fg_color=C["card"], border_color=C["border"],
+            button_color=C["accent2"], button_hover_color=C["accent"], text_color=C["txt"],
+            dropdown_fg_color=C["bg2"], dropdown_hover_color=C["card"], dropdown_text_color=C["txt"],
+            font=ctk.CTkFont(size=12),
+        )
+        self.comfort_combo.set("  (cargando héroes...)")
+        self.comfort_combo.grid(row=7, column=1, sticky="ew", padx=(0, 8), pady=(6, 0))
+        ctk.CTkButton(
+            inner, text="＋  Añadir a la lista", width=200, height=30, fg_color="transparent",
+            border_width=1, border_color=C["border"], text_color=C["txt2"], hover_color=C["bg2"],
+            font=ctk.CTkFont(size=12), command=self._add_comfort_hero,
+        ).grid(row=7, column=2, pady=(6, 0))
+
         self._grid_out_dir: Path | None = None
         self._refresh_meta_status()
 
@@ -750,6 +783,54 @@ class App(ctk.CTk):
             text=summary + "\n" + "\n".join(lines), text_color=C["green"] if not failed else C["amber"],
         )
         messagebox.showinfo("Hero Grids", summary + "\n\n" + "\n".join(lines))
+
+    # ── Héroes comfort ───────────────────────────────────────────────────────
+    def _preload_hero_map(self):
+        def worker():
+            opendota.get_hero_map()
+            self.after(0, self._refresh_comfort_ui)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _refresh_comfort_ui(self):
+        hero_map = opendota.get_hero_map()
+        if not hero_map:
+            self.comfort_entry.configure(placeholder_text="No se pudo descargar el listado de héroes (OpenDota)")
+            return
+        names = sorted(hero_map.values())
+        self.comfort_combo.configure(values=[f"  {n}" for n in names])
+        self.comfort_combo.set(f"  {names[0]}")
+        current = ", ".join(hero_map.get(h, f"#{h}") for h in self.cfg.comfort_hero_ids)
+        self.comfort_entry.delete(0, "end")
+        self.comfort_entry.insert(0, current)
+
+    def _add_comfort_hero(self):
+        name = self.comfort_combo.get().strip()
+        if not name or name.startswith("("):
+            return
+        current = self.comfort_entry.get().strip()
+        if name.lower() in [t.strip().lower() for t in current.split(",")]:
+            return
+        self.comfort_entry.delete(0, "end")
+        self.comfort_entry.insert(0, f"{current}, {name}" if current else name)
+
+    def _save_comfort(self):
+        ids, unknown = opendota.resolve_hero_names(self.comfort_entry.get())
+        if unknown:
+            messagebox.showwarning(
+                "Héroes no reconocidos",
+                "No encontré estos nombres:\n  " + "\n  ".join(unknown)
+                + "\n\nUsá el desplegable para agregar con el nombre exacto.",
+            )
+            return
+        if not ids:
+            messagebox.showwarning("Lista vacía", "Agregá al menos un héroe a la lista comfort.")
+            return
+        self.cfg.set_comfort_hero_ids(ids)
+        self.cfg.save()
+        self._refresh_comfort_ui()
+        self._log(f"Comfort guardado ({len(ids)}): {self.comfort_entry.get()}")
+        self.status.set(f"Comfort guardado: {len(ids)} héroes", "ok")
 
     def _open_grid_folder(self):
         if self._grid_out_dir and self._grid_out_dir.exists():
