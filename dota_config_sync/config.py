@@ -22,18 +22,20 @@ log = logging.getLogger(__name__)
 DEFAULT_META_META: dict[str, Any] = {
     "config_name": "Meta Meta",
     "categories": [
+        # hero_ids por posición: snapshot del meta 7.41f (2026-10-03). Es solo el fallback
+        # cuando Dota2ProTracker no responde; al generar se reemplazan por el ranking vivo.
         {"category_name": "OFFLANE / TIER S - A  / POS 3", "x_position": 0.0, "y_position": 0.0,
-         "width": 474.782623, "height": 259.130432, "hero_ids": [2, 135, 60, 104, 36, 14, 128]},
+         "width": 474.782623, "height": 259.130432, "hero_ids": [33, 60, 55, 14, 2, 135]},
         {"category_name": "SOFT / POS 4", "x_position": 833.913086, "y_position": 0.0,
-         "width": 304.347839, "height": 295.652191, "hero_ids": [14, 71, 22, 105, 62, 88, 74]},
+         "width": 304.347839, "height": 295.652191, "hero_ids": [62, 71, 86, 88, 9, 14]},
         {"category_name": "MID / POS 2", "x_position": 474.782623, "y_position": 0.0,
-         "width": 357.391327, "height": 169.565216, "hero_ids": [74, 128, 25, 13, 90, 34, 76]},
+         "width": 357.391327, "height": 169.565216, "hero_ids": [74, 76, 49, 82, 106, 90]},
         {"category_name": "CARRY / POS 1", "x_position": 0.869565, "y_position": 300.0,
-         "width": 296.521759, "height": 163.478271, "hero_ids": [6, 41, 12, 8, 54, 93, 67]},
+         "width": 296.521759, "height": 163.478271, "hero_ids": [12, 18, 93, 54, 67, 8]},
         {"category_name": "COMFORT", "x_position": 310.434784, "y_position": 286.086975,
          "width": 389.565216, "height": 253.913055, "hero_ids": [92, 23, 97, 38, 7, 98, 55, 107, 155]},
         {"category_name": "SUPP / POS 5", "x_position": 832.173950, "y_position": 295.652191,
-         "width": 335.652191, "height": 185.217392, "hero_ids": [14, 31, 87, 86, 27, 75, 128]},
+         "width": 335.652191, "height": 185.217392, "hero_ids": [112, 50, 31, 131, 121, 87]},
     ],
 }
 

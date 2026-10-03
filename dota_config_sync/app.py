@@ -6,7 +6,7 @@ import os
 import threading
 from datetime import datetime
 from pathlib import Path
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
@@ -262,6 +262,91 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=13, weight="bold"), command=self._do_generate_autoexec,
         )
         self.btn_autoexec.grid(row=1, column=1)
+
+        ctk.CTkLabel(
+            inner, text="COMPARTIR ENTRE PCs  (exportá el autoexec.cfg en uso; en la otra PC importalo como perfil)",
+            font=ctk.CTkFont(size=10, weight="bold"), text_color=C["txt3"], anchor="w",
+        ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(14, 4))
+
+        share_row = ctk.CTkFrame(inner, fg_color="transparent")
+        share_row.grid(row=3, column=0, columnspan=2, sticky="ew")
+        for text, cmd in (
+            ("⬆  Exportar autoexec actual…", self._export_autoexec),
+            ("⬇  Importar perfil .cfg…", self._import_profile),
+            ("📂  Carpeta de perfiles", self._open_profiles_dir),
+        ):
+            ctk.CTkButton(
+                share_row, text=text, height=30, fg_color="transparent", border_width=1,
+                border_color=C["border"], text_color=C["txt2"], hover_color=C["bg2"],
+                font=ctk.CTkFont(size=12), command=cmd,
+            ).pack(side="left", padx=(0, 8))
+
+    def _refresh_autoexec_profiles(self, select: str | None = None):
+        self.autoexec_profiles = {p.stem: p for p in autoexec.list_profiles()}
+        names = list(self.autoexec_profiles) or ["(sin perfiles)"]
+        self.autoexec_combo.configure(values=names)
+        self.autoexec_combo.set(select if select in names else names[0])
+
+    def _main_account_label(self) -> str:
+        main = next((a for a in self.accounts if a["steam_id64"] == self.cfg.preferred_main_id64), None)
+        return autoexec.safe_profile_name((main or {}).get("login_name") or (main or {}).get("name") or "")
+
+    def _export_autoexec(self):
+        if not self.steam_path:
+            messagebox.showerror("Steam no detectado", "No se encontró Steam, no puedo localizar Dota.")
+            return
+        src = autoexec.installed_autoexec(self.steam_path)
+        if not src:
+            messagebox.showwarning(
+                "Sin autoexec.cfg",
+                "Dota no tiene un autoexec.cfg todavía. Generá uno desde un perfil y después exportalo.",
+            )
+            return
+        suffix = self._main_account_label()
+        initial = f"autoexec_{suffix}.cfg" if suffix and suffix != "perfil" else "autoexec.cfg"
+        desktop = Path.home() / "Desktop"
+        dest = filedialog.asksaveasfilename(
+            title="Exportar autoexec.cfg", initialfile=initial, defaultextension=".cfg",
+            initialdir=str(desktop if desktop.exists() else Path.home()),
+            filetypes=[("Config de Dota 2", "*.cfg"), ("Todos", "*.*")],
+        )
+        if not dest:
+            return
+        try:
+            out = autoexec.export_autoexec(src, Path(dest))
+        except OSError as e:
+            messagebox.showerror("Error", f"No se pudo exportar:\n\n{e}")
+            return
+        self._log(f"✔ autoexec.cfg exportado a {out}")
+        self.status.set("✔ autoexec.cfg exportado", "ok")
+        messagebox.showinfo(
+            "Exportado",
+            f"Guardado en:\n{out}\n\nEn la otra PC: abrí esta app → Importar perfil .cfg → Generar autoexec.cfg.",
+        )
+
+    def _import_profile(self):
+        src = filedialog.askopenfilename(
+            title="Importar perfil autoexec", filetypes=[("Config de Dota 2", "*.cfg"), ("Todos", "*.*")],
+        )
+        if not src:
+            return
+        src_path = Path(src)
+        stem = autoexec.safe_profile_name(src_path.stem.removeprefix("autoexec_"))
+        if stem in self.autoexec_profiles and not messagebox.askyesno(
+            "Perfil existente", f'Ya existe el perfil "{stem}". ¿Reemplazarlo?',
+        ):
+            return
+        try:
+            dest = autoexec.import_profile(src_path, stem)
+        except OSError as e:
+            messagebox.showerror("Error", f"No se pudo importar:\n\n{e}")
+            return
+        self._refresh_autoexec_profiles(select=dest.stem)
+        self._log(f"✔ Perfil importado: {dest}")
+        self.status.set(f'Perfil "{dest.stem}" listo — Generar autoexec.cfg para aplicarlo', "ok")
+
+    def _open_profiles_dir(self):
+        os.startfile(autoexec.ensure_default_profiles())  # noqa: S606 — carpeta local propia
 
     def _do_generate_autoexec(self):
         name = self.autoexec_combo.get()

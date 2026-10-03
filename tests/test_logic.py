@@ -151,6 +151,37 @@ def test_find_dota_cfg_dir_not_installed(tmp_path):
     assert autoexec.find_dota_cfg_dir(tmp_path) is None
 
 
+def test_safe_profile_name():
+    assert autoexec.safe_profile_name("  draenool ") == "draenool"
+    assert autoexec.safe_profile_name("mi perfil/alto!") == "mi_perfil_alto"
+    assert autoexec.safe_profile_name("///") == "perfil"
+
+
+def test_export_autoexec_preserves_bytes(tmp_path):
+    src = tmp_path / "autoexec.cfg"
+    src.write_bytes(b"\xef\xbb\xbf// con BOM\r\nfps_max \"0\"\r\n")
+    out = autoexec.export_autoexec(src, tmp_path / "salida" / "autoexec_draenool.cfg")
+    assert out.read_bytes() == src.read_bytes()
+
+
+def test_import_profile_copies_into_profiles_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(autoexec, "app_base_dir", lambda: tmp_path)
+    src = tmp_path / "autoexec_draenool.cfg"
+    src.write_text('fps_max "0"\n', encoding="utf-8")
+    dest = autoexec.import_profile(src, "draenool")
+    assert dest == tmp_path / "autoexec_profiles" / "draenool.cfg"
+    assert dest.read_text(encoding="utf-8") == 'fps_max "0"\n'
+    assert dest in autoexec.list_profiles()
+
+
+def test_installed_autoexec_requires_file(tmp_path):
+    cfg = _make_dota_install(tmp_path)
+    assert autoexec.installed_autoexec(tmp_path) is None
+    cfg.mkdir()
+    (cfg / "autoexec.cfg").write_text("x", encoding="utf-8")
+    assert autoexec.installed_autoexec(tmp_path) == cfg / "autoexec.cfg"
+
+
 def test_generate_backs_up_existing(tmp_path):
     profile = tmp_path / "alto.cfg"
     profile.write_text('fps_max "0"\n', encoding="utf-8")

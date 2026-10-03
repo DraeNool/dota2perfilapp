@@ -103,6 +103,36 @@ def find_dota_cfg_dir(steam_path: Path) -> Path | None:
     return None
 
 
+def installed_autoexec(steam_path: Path) -> Path | None:
+    """Ruta del autoexec.cfg que Dota está usando, o None si no hay instalación o archivo."""
+    cfg_dir = find_dota_cfg_dir(steam_path)
+    if not cfg_dir:
+        return None
+    target = cfg_dir / "autoexec.cfg"
+    return target if target.exists() else None
+
+
+def safe_profile_name(name: str) -> str:
+    """Nombre de archivo seguro para un perfil: letras, dígitos, guion y guion bajo."""
+    cleaned = re.sub(r"[^\w\-]+", "_", name.strip(), flags=re.UNICODE).strip("_")
+    return cleaned or "perfil"
+
+
+def export_autoexec(src: Path, dest: Path) -> Path:
+    """Copia byte a byte (conserva BOM y saltos de línea) el autoexec a `dest`."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(src.read_bytes())
+    return dest
+
+
+def import_profile(src: Path, name: str | None = None) -> Path:
+    """Copia un .cfg externo a la carpeta de perfiles y devuelve su ruta."""
+    stem = safe_profile_name(name or src.stem)
+    dest = ensure_default_profiles() / f"{stem}.cfg"
+    dest.write_bytes(src.read_bytes())
+    return dest
+
+
 def generate(profile_file: Path, cfg_dir: Path) -> Path:
     """
     Escribe autoexec.cfg en cfg_dir copiando el contenido del perfil.
