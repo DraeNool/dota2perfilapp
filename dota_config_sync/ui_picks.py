@@ -182,14 +182,16 @@ class HeroGridCanvas(tk.Canvas):
 class Slot(ctk.CTkFrame):
     """Un pick: retrato + nombre + (opcional) posición + quitar."""
 
-    def __init__(self, master, on_remove, on_change, **kw):
-        super().__init__(master, fg_color=C["card"], corner_radius=8, **kw)
+    def __init__(self, master, on_remove, on_change, on_click, **kw):
+        super().__init__(master, fg_color=C["card"], corner_radius=8, cursor="hand2", **kw)
         self.hero_id: int | None = None
         self.columnconfigure(1, weight=1)
         self.img = ctk.CTkLabel(self, text="", image=hero_images.blank_image(TILE), width=TILE[0], height=TILE[1])
         self.img.grid(row=0, column=0, padx=(6, 8), pady=5)
-        self.name = _text(self, "vacío", 12, C["txt3"])
+        self.name = _text(self, "vacío · click para elegir", 12, C["txt3"])
         self.name.grid(row=0, column=1, sticky="ew")
+        for wdg in (self, self.img, self.name):
+            wdg.bind("<Button-1>", lambda _e: on_click())
         self.pos = _combo(self, [NO_POS, *POS_LABELS], 82, lambda _v: on_change())
         self.pos.set(NO_POS)
         self.pos.grid(row=0, column=2, padx=(0, 6))
@@ -207,7 +209,7 @@ class Slot(ctk.CTkFrame):
 
     def clear(self):
         self.hero_id = None
-        self.name.configure(text="vacío", text_color=C["txt3"])
+        self.name.configure(text="vacío · click para elegir", text_color=C["txt3"])
         self.img.configure(image=hero_images.blank_image(TILE), text="")
         self.pos.set(NO_POS)
 
@@ -262,6 +264,60 @@ class RecRow(ctk.CTkFrame):
                 chip.pack(side="left", padx=(0, 4), pady=1)
             else:
                 chip.pack_forget()
+
+
+class HeroPickerPopup(ctk.CTkToplevel):
+    """Ventana para elegir el héroe de un slot: buscador arriba, la misma grilla abajo, Enter o click eligen."""
+
+    def __init__(self, master, title: str, catalog: dict[int, dict], photos: dict[int, tk.PhotoImage],
+                 allies: set[int], enemies: set[int], recs: list[int], on_pick):
+        super().__init__(master, fg_color=C["bg"])
+        self.title(title)
+        self.geometry("860x720")
+        self.minsize(640, 480)
+        self.transient(master.winfo_toplevel())
+        self._on_pick = on_pick
+        top = ctk.CTkFrame(self, fg_color="transparent")
+        top.pack(fill="x", padx=16, pady=(14, 6))
+        _text(top, title, 13, C["txt"], bold=True).pack(side="left")
+        self.search = ctk.CTkEntry(
+            top, placeholder_text="Buscar héroe…  (Enter elige el primero · Esc cierra)", width=340,
+            fg_color=C["card"], border_color=C["border"], text_color=C["txt"], font=ctk.CTkFont(size=12),
+        )
+        self.search.pack(side="right")
+        self.hover = _text(self, " ", 11, C["txt2"])
+        self.hover.pack(fill="x", padx=16)
+        body = ctk.CTkScrollableFrame(self, fg_color=C["bg2"], corner_radius=12,
+                                      scrollbar_button_color=C["border"], scrollbar_button_hover_color=C["accent2"])
+        body.pack(fill="both", expand=True, padx=16, pady=(4, 14))
+        self.grid = HeroGridCanvas(body, on_pick=self._pick, on_hover=lambda n: self.hover.configure(text=n or " "))
+        self.grid.photos = photos
+        self.grid.allies, self.grid.enemies, self.grid.recs = allies, enemies, recs
+        self.grid.pack(fill="x", padx=6, pady=6)
+        self.grid.set_catalog(catalog)
+        self.search.bind("<KeyRelease>", lambda _e: self.grid.set_filter(self.search.get()))
+        self.search.bind("<Return>", lambda _e: self._pick_first())
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.after(120, self._focus)
+
+    def _focus(self):
+        self.lift()
+        self.focus_force()
+        self.search.focus_set()
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+    def _pick_first(self):
+        taken = self.grid.allies | self.grid.enemies
+        visible = [h for h in self.grid.visible_ids() if h not in taken]
+        if visible:
+            self._pick(visible[0])
+
+    def _pick(self, hero_id: int):
+        self._on_pick(hero_id)
+        self.destroy()
 
 
 class PicksTab(ctk.CTkFrame):
@@ -391,7 +447,8 @@ class PicksTab(ctk.CTkFrame):
             wdg.bind("<Button-1>", lambda _e, s=side: self._set_side(s))
         slots = []
         for i in range(5):
-            slot = Slot(inner, on_remove=lambda s=side, i=i: self._remove(s, i), on_change=self._schedule_recompute)
+            slot = Slot(inner, on_remove=lambda s=side, i=i: self._remove(s, i), on_change=self._schedule_recompute,
+                        on_click=lambda s=side, i=i: self._open_picker(s, i))
             slot.pack(fill="x", pady=2)
             slots.append(slot)
         self.slots[side] = slots
@@ -433,17 +490,41 @@ class PicksTab(ctk.CTkFrame):
         if slot is None:
             self.ctx.status(f"{side or self.side}: los 5 picks ya están cargados", "info")
             return
+        self._fill_slot(slot, hero_id)
+
+    def _fill_slot(self, slot: Slot, hero_id: int):
         info = self.catalog.get(hero_id, {})
         slot.set_hero(hero_id, info.get("name", f"#{hero_id}"), hero_images.portrait_image(info.get("npc", ""), TILE))
+        self._reset_search()
         self._schedule_recompute()
+
+    def _reset_search(self):
+        if self.search.get():
+            self.search.delete(0, "end")
+            self.grid.set_filter("")
 
     def _add_first_visible(self):
         taken = self._taken()
         visible = [h for h in self.grid.visible_ids() if h not in taken]
         if visible:
             self._add(visible[0])
-            self.search.delete(0, "end")
-            self.grid.set_filter("")
+
+    def _open_picker(self, side: str, index: int):
+        if not self.catalog:
+            return
+        slot = self.slots[side][index]
+        state = self._state()
+
+        def chosen(hero_id: int):
+            if hero_id in self._taken() and hero_id != slot.hero_id:
+                return
+            self._fill_slot(slot, hero_id)
+
+        HeroPickerPopup(
+            self, title=f"Elegir héroe · {side} · slot {index + 1}", catalog=self.catalog, photos=self.grid.photos,
+            allies=set(state.allies) - {slot.hero_id}, enemies=set(state.enemies) - {slot.hero_id},
+            recs=self.grid.recs, on_pick=chosen,
+        )
 
     def _remove(self, side: str, index: int):
         self.slots[side][index].clear()
