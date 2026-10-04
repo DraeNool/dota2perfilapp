@@ -229,6 +229,31 @@ def _pick_data():
     )
 
 
+def test_layout_tiles_groups_by_attribute_filters_and_wraps():
+    from dota_config_sync.ui_picks import GAP, HEADER_H, PAD, TILE_H, TILE_W, layout_tiles
+
+    catalog = {
+        2: {"name": "Axe", "attr": "str"}, 155: {"name": "Largo", "attr": "str"},
+        1: {"name": "Anti-Mage", "attr": "agi"}, 55: {"name": "Dark Seer", "attr": "int"},
+        128: {"name": "Dark Willow", "attr": "all"},
+    }
+    items, total = layout_tiles(catalog, "", columns=1)
+    headers = [it[1] for it in items if it[0] == "header"]
+    tiles = [it for it in items if it[0] == "tile"]
+    assert headers == ["FUERZA", "AGILIDAD", "INTELIGENCIA", "UNIVERSAL"]
+    assert [t[1] for t in tiles] == [2, 155, 1, 55, 128]           # orden por nombre dentro de cada atributo
+    axe, largo = tiles[0], tiles[1]
+    assert axe[2] == PAD and axe[3] == PAD + HEADER_H
+    assert largo[3] == axe[3] + TILE_H + GAP                      # columns=1: segunda fila
+    assert total > largo[3] + TILE_H
+    filtered, _ = layout_tiles(catalog, "dark", columns=3)
+    assert [it[1] for it in filtered if it[0] == "tile"] == [55, 128]
+    assert [it[1] for it in filtered if it[0] == "header"] == ["INTELIGENCIA", "UNIVERSAL"]
+    two_cols, _ = layout_tiles(catalog, "", columns=2)
+    largo_x = next(it[2] for it in two_cols if it[0] == "tile" and it[1] == 155)
+    assert largo_x == PAD + TILE_W + GAP                           # misma fila, segunda columna
+
+
 def test_bracket_from_rank_tier():
     from dota_config_sync.picks import bracket_from_rank_tier
 

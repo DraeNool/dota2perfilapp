@@ -6,15 +6,48 @@ from collections.abc import Callable
 from pathlib import Path
 
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageTk
 
 from . import http
 from .paths import cache_dir
+from .theme import C
 
 log = logging.getLogger(__name__)
 
 PORTRAIT_URL = "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/{npc}.png"
 _IMAGES: dict[tuple[str, int, int], ctk.CTkImage] = {}
+_PHOTOS: dict[tuple[str, int, int], ImageTk.PhotoImage] = {}
+_BLANKS: dict[tuple[int, int], ctk.CTkImage] = {}
+
+
+def blank_image(size: tuple[int, int] = (64, 36)) -> ctk.CTkImage:
+    """Imagen vacía del color de tarjeta: CustomTkinter no borra un image=None, hay que reemplazarlo."""
+    if size not in _BLANKS:
+        img = Image.new("RGB", size, C["bg2"])
+        _BLANKS[size] = ctk.CTkImage(light_image=img, dark_image=img, size=size)
+    return _BLANKS[size]
+
+
+def _open_resized(npc: str, size: tuple[int, int]) -> Image.Image | None:
+    path = portrait_path(npc)
+    if not path.exists():
+        return None
+    try:
+        return Image.open(path).convert("RGB").resize(size, Image.Resampling.LANCZOS)
+    except OSError as e:
+        log.debug("Retrato %s ilegible: %s", npc, e)
+        return None
+
+
+def portrait_photo(npc: str, size: tuple[int, int] = (64, 36)) -> ImageTk.PhotoImage | None:
+    """PhotoImage para dibujar en un tk.Canvas (memoizada). Llamar desde el hilo de Tk."""
+    key = (npc, *size)
+    if key not in _PHOTOS:
+        img = _open_resized(npc, size)
+        if img is None:
+            return None
+        _PHOTOS[key] = ImageTk.PhotoImage(img)
+    return _PHOTOS[key]
 
 
 def portrait_path(npc: str) -> Path:
@@ -54,15 +87,9 @@ def ensure_portraits(npcs: list[str], on_ready: Callable[[str], None] | None = N
 def portrait_image(npc: str, size: tuple[int, int] = (64, 36)) -> ctk.CTkImage | None:
     """CTkImage del retrato ya descargado (memoizada por tamaño); None si no está en disco."""
     key = (npc, *size)
-    if key in _IMAGES:
-        return _IMAGES[key]
-    path = portrait_path(npc)
-    if not path.exists():
-        return None
-    try:
-        img = Image.open(path).convert("RGB").resize(size, Image.Resampling.LANCZOS)
-    except OSError as e:
-        log.debug("Retrato %s ilegible: %s", npc, e)
-        return None
-    _IMAGES[key] = ctk.CTkImage(light_image=img, dark_image=img, size=size)
+    if key not in _IMAGES:
+        img = _open_resized(npc, size)
+        if img is None:
+            return None
+        _IMAGES[key] = ctk.CTkImage(light_image=img, dark_image=img, size=size)
     return _IMAGES[key]

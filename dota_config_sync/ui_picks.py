@@ -1,7 +1,8 @@
-"""Pestaña Picks: draft con grilla de retratos, buscador y recomendaciones resaltadas."""
+"""Pestaña Picks: draft con grilla de retratos (un solo Canvas), buscador y recomendaciones resaltadas."""
 
 import logging
 import threading
+import tkinter as tk
 
 import customtkinter as ctk
 
@@ -16,7 +17,8 @@ NO_POS = "—"
 SIDES = ("Mi equipo", "Enemigos")
 ATTR_ORDER = (("str", "FUERZA"), ("agi", "AGILIDAD"), ("int", "INTELIGENCIA"), ("all", "UNIVERSAL"))
 TILE = (64, 36)
-TILES_PER_ROW = 10
+TILE_W, TILE_H, GAP, HEADER_H, PAD = 64, 36, 6, 22, 8
+MAX_RECS, MAX_ALERTS, MAX_CHIPS = 10, 6, 6
 CHIP_COLORS = {
     "": (C["card"], C["txt2"]), "g": ("#10302a", C["green"]),
     "a": ("#3a2a10", C["amber"]), "r": ("#3a1a1f", C["red"]),
@@ -40,6 +42,143 @@ def _combo(parent, values: list[str], width: int, command) -> ctk.CTkComboBox:
                            font=ctk.CTkFont(size=12), **COMBO_STYLE)
 
 
+def layout_tiles(catalog: dict[int, dict], query: str, columns: int) -> tuple[list[tuple], int]:
+    """
+    Posiciones en píxeles de la grilla: [("header", etiqueta, x, y) | ("tile", hero_id, x, y)], alto total.
+
+    Agrupa por atributo, ordena por nombre y filtra por `query` (subcadena normalizada). Pura.
+    """
+    q = opendota._normalize_hero_name(query)
+    columns = max(1, columns)
+    items: list[tuple] = []
+    y = PAD
+    ordered = sorted(catalog.items(), key=lambda kv: kv[1]["name"])
+    for attr, label in ATTR_ORDER:
+        heroes = [hid for hid, info in ordered
+                  if info.get("attr", "all") == attr and (not q or q in opendota._normalize_hero_name(info["name"]))]
+        if not heroes:
+            continue
+        items.append(("header", label, PAD, y))
+        y += HEADER_H
+        for i, hid in enumerate(heroes):
+            r, c = divmod(i, columns)
+            items.append(("tile", hid, PAD + c * (TILE_W + GAP), y + r * (TILE_H + GAP)))
+        rows = (len(heroes) + columns - 1) // columns
+        y += rows * (TILE_H + GAP) + 6
+    return items, y + PAD
+
+
+class HeroGridCanvas(tk.Canvas):
+    """Los 127 retratos en un solo widget: dibujar y resaltar cuesta milisegundos, no relayouts."""
+
+    def __init__(self, master, on_pick, on_hover, **kw):
+        super().__init__(master, bg=C["bg2"], highlightthickness=0, bd=0, height=240, cursor="arrow", **kw)
+        self.on_pick, self.on_hover = on_pick, on_hover
+        self.catalog: dict[int, dict] = {}
+        self.query = ""
+        self.photos: dict[int, tk.PhotoImage] = {}
+        self.allies: set[int] = set()
+        self.enemies: set[int] = set()
+        self.recs: list[int] = []
+        self.rects: list[tuple[int, int, int, int, int]] = []
+        self._hover: int | None = None
+        self._height = 0
+        self.bind("<Configure>", lambda _e: self.redraw())
+        self.bind("<Button-1>", self._click)
+        self.bind("<Motion>", self._motion)
+        self.bind("<Leave>", lambda _e: self._set_hover(None))
+
+    def set_catalog(self, catalog: dict[int, dict]):
+        self.catalog = catalog
+        self.redraw()
+
+    def set_filter(self, query: str):
+        self.query = query
+        self.redraw()
+
+    def set_states(self, allies: set[int], enemies: set[int], recs: list[int]):
+        self.allies, self.enemies, self.recs = allies, enemies, recs
+        self.redraw()
+
+    def set_photo(self, hid: int, photo: tk.PhotoImage):
+        self.photos[hid] = photo
+        for item in self.find_withtag(f"img{hid}"):
+            self.itemconfigure(item, image=photo)
+
+    def visible_ids(self) -> list[int]:
+        return [hid for _, _, _, _, hid in self.rects]
+
+    def redraw(self):
+        width = self.winfo_width()
+        if width < TILE_W + 2 * PAD:
+            return
+        columns = (width - 2 * PAD + GAP) // (TILE_W + GAP)
+        items, total = layout_tiles(self.catalog, self.query, columns)
+        if total != self._height:
+            self._height = total
+            self.configure(height=total)
+        self.delete("all")
+        self.rects = []
+        for item in items:
+            if item[0] == "header":
+                self.create_text(item[2], item[3] + 6, text=item[1], anchor="w", fill=C["txt3"],
+                                 font=("Segoe UI", 9, "bold"))
+                continue
+            _, hid, x, y = item
+            x2, y2 = x + TILE_W, y + TILE_H
+            photo = self.photos.get(hid)
+            if photo:
+                self.create_image(x, y, image=photo, anchor="nw", tags=(f"img{hid}",))
+            else:
+                self.create_rectangle(x, y, x2, y2, fill=C["card"], outline="")
+                self.create_text((x + x2) / 2, (y + y2) / 2, text=self.catalog[hid]["name"][:2].upper(),
+                                 fill=C["txt2"], font=("Segoe UI", 9, "bold"))
+            taken = hid in self.allies or hid in self.enemies
+            if taken:
+                self.create_rectangle(x, y, x2, y2, fill=C["bg"], outline="", stipple="gray50")
+            color, width_px = self._frame_for(hid)
+            if width_px:
+                inset = width_px / 2
+                self.create_rectangle(x + inset, y + inset, x2 - inset, y2 - inset, outline=color, width=width_px)
+            if hid in self.recs[:3]:
+                rank = self.recs.index(hid) + 1
+                self.create_rectangle(x2 - 16, y, x2, y + 14, fill=C["green"], outline="")
+                self.create_text(x2 - 8, y + 7, text=str(rank), fill="#06281c", font=("Segoe UI", 8, "bold"))
+            self.rects.append((x, y, x2, y2, hid))
+
+    def _frame_for(self, hid: int) -> tuple[str, int]:
+        if hid in self.allies:
+            return C["dst"], 2
+        if hid in self.enemies:
+            return C["red"], 2
+        if hid in self.recs[:3]:
+            return C["green"], 3
+        if hid in self.recs:
+            return C["accent"], 2
+        return C["border"], 1
+
+    def _hit(self, x: int, y: int) -> int | None:
+        for x1, y1, x2, y2, hid in self.rects:
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                return hid
+        return None
+
+    def _click(self, event):
+        hid = self._hit(event.x, event.y)
+        if hid is not None and hid not in self.allies and hid not in self.enemies:
+            self.on_pick(hid)
+
+    def _motion(self, event):
+        self._set_hover(self._hit(event.x, event.y))
+
+    def _set_hover(self, hid: int | None):
+        if hid == self._hover:
+            return
+        self._hover = hid
+        self.configure(cursor="hand2" if hid is not None else "arrow")
+        self.on_hover(self.catalog[hid]["name"] if hid is not None else "")
+
+
 class Slot(ctk.CTkFrame):
     """Un pick: retrato + nombre + (opcional) posición + quitar."""
 
@@ -47,7 +186,7 @@ class Slot(ctk.CTkFrame):
         super().__init__(master, fg_color=C["card"], corner_radius=8, **kw)
         self.hero_id: int | None = None
         self.columnconfigure(1, weight=1)
-        self.img = ctk.CTkLabel(self, text="", width=TILE[0], height=TILE[1], fg_color=C["bg2"], corner_radius=4)
+        self.img = ctk.CTkLabel(self, text="", image=hero_images.blank_image(TILE), width=TILE[0], height=TILE[1])
         self.img.grid(row=0, column=0, padx=(6, 8), pady=5)
         self.name = _text(self, "vacío", 12, C["txt3"])
         self.name.grid(row=0, column=1, sticky="ew")
@@ -64,12 +203,12 @@ class Slot(ctk.CTkFrame):
     def set_hero(self, hero_id: int, name: str, image: ctk.CTkImage | None):
         self.hero_id = hero_id
         self.name.configure(text=name, text_color=C["txt"])
-        self.img.configure(image=image, text="" if image else name[:2].upper())
+        self.img.configure(image=image or hero_images.blank_image(TILE), text="" if image else name[:2].upper())
 
     def clear(self):
         self.hero_id = None
         self.name.configure(text="vacío", text_color=C["txt3"])
-        self.img.configure(image=None, text="")
+        self.img.configure(image=hero_images.blank_image(TILE), text="")
         self.pos.set(NO_POS)
 
     def show_pos(self, visible: bool):
@@ -82,15 +221,55 @@ class Slot(ctk.CTkFrame):
         return POS_LABELS.index(self.pos.get()) + 1 if self.pos.get() in POS_LABELS else None
 
 
+class RecRow(ctk.CTkFrame):
+    """Fila de recomendación reutilizable: se actualiza, no se recrea."""
+
+    def __init__(self, master, on_click, **kw):
+        super().__init__(master, fg_color="transparent", **kw)
+        self.hero_id: int | None = None
+        self.columnconfigure(2, weight=1)
+        self.rank = _text(self, "", 12, C["txt3"], bold=True, width=22)
+        self.rank.grid(row=0, column=0, rowspan=3, sticky="n")
+        self.pic = ctk.CTkLabel(self, text="", image=hero_images.blank_image(TILE), width=TILE[0], height=TILE[1])
+        self.pic.grid(row=0, column=1, rowspan=3, padx=(0, 8), sticky="n")
+        self.name = _text(self, "", 13, C["txt"], bold=True)
+        self.name.grid(row=0, column=2, sticky="w")
+        self.score = _text(self, "", 17, C["accent"], bold=True)
+        self.score.grid(row=0, column=3, rowspan=2, sticky="e")
+        self.reason = _text(self, "", 11, C["txt2"], wraplength=330, justify="left")
+        self.reason.grid(row=1, column=2, sticky="w")
+        self.chips = ctk.CTkFrame(self, fg_color="transparent")
+        self.chips.grid(row=2, column=2, columnspan=2, sticky="w", pady=(2, 0))
+        self.chip_labels = [
+            ctk.CTkLabel(self.chips, text="", font=ctk.CTkFont(size=10), corner_radius=4, padx=6, pady=1)
+            for _ in range(MAX_CHIPS)
+        ]
+        for wdg in (self, self.rank, self.pic, self.name, self.score, self.reason, self.chips, *self.chip_labels):
+            wdg.bind("<Button-1>", lambda _e: on_click(self.hero_id))
+
+    def update_rec(self, rank: int, r: picks.Recommendation, image: ctk.CTkImage | None):
+        self.hero_id = r.hero_id
+        self.rank.configure(text=str(rank))
+        self.pic.configure(image=image or hero_images.blank_image(TILE), text="" if image else r.name[:2].upper())
+        self.name.configure(text=r.name)
+        self.score.configure(text=f"{r.score:.0f}")
+        self.reason.configure(text=r.reason)
+        for i, chip in enumerate(self.chip_labels):
+            if i < len(r.chips):
+                text, tone = r.chips[i]
+                bg, fg = CHIP_COLORS.get(tone, CHIP_COLORS[""])
+                chip.configure(text=text, fg_color=bg, text_color=fg)
+                chip.pack(side="left", padx=(0, 4), pady=1)
+            else:
+                chip.pack_forget()
+
+
 class PicksTab(ctk.CTkFrame):
     def __init__(self, master, ctx: TabContext, **kw):
         super().__init__(master, fg_color="transparent", **kw)
         self.ctx = ctx
         self.data = picks.PickData()
         self.catalog: dict[int, dict] = {}
-        self.npc_to_id: dict[str, int] = {}
-        self.tiles: dict[int, ctk.CTkButton] = {}
-        self.attr_frames: dict[str, tuple[ctk.CTkLabel, ctk.CTkFrame]] = {}
         self.slots: dict[str, list[Slot]] = {}
         self.side = SIDES[0]
         self._patch: str | None = None
@@ -145,7 +324,7 @@ class PicksTab(ctk.CTkFrame):
         gbox.pack(fill="x", pady=(12, 0))
         head = ctk.CTkFrame(gin, fg_color="transparent")
         head.pack(fill="x")
-        head.columnconfigure(1, weight=1)
+        head.columnconfigure(2, weight=1)
         _text(head, "HÉROES · click para agregar a", 10, C["txt3"], bold=True).grid(row=0, column=0, padx=(0, 8))
         self.side_switch = ctk.CTkSegmentedButton(
             head, values=list(SIDES), command=self._set_side, font=ctk.CTkFont(size=12, weight="bold"),
@@ -153,20 +332,19 @@ class PicksTab(ctk.CTkFrame):
             unselected_hover_color=C["bg2"], fg_color=C["bg2"], text_color=C["txt"],
         )
         self.side_switch.set(self.side)
-        self.side_switch.grid(row=0, column=0, columnspan=2, sticky="w", padx=(190, 0))
+        self.side_switch.grid(row=0, column=1, sticky="w")
         self.search = ctk.CTkEntry(
             head, placeholder_text="Buscar héroe…  (Enter agrega el primero)", width=280, fg_color=C["card"],
             border_color=C["border"], text_color=C["txt"], font=ctk.CTkFont(size=12),
         )
-        self.search.grid(row=0, column=2, sticky="e")
-        self.search.bind("<KeyRelease>", lambda _e: self._layout_grid())
+        self.search.grid(row=0, column=3, sticky="e")
+        self.search.bind("<KeyRelease>", lambda _e: self.grid.set_filter(self.search.get()))
         self.search.bind("<Return>", lambda _e: self._add_first_visible())
         self.hover = _text(gin, " ", 11, C["txt2"])
         self.hover.pack(fill="x", pady=(6, 0))
-        self.grid_body = ctk.CTkFrame(gin, fg_color="transparent")
-        self.grid_body.pack(fill="x")
-        _text(self.grid_body, "Cargando héroes...", 11, C["txt3"]).pack(fill="x", pady=8)
-        legend = ("Borde verde: top 3 recomendados · violeta: top 10 · teal: en tu equipo · rojo: enemigo")
+        self.grid = HeroGridCanvas(gin, on_pick=self._add, on_hover=lambda n: self.hover.configure(text=n or " "))
+        self.grid.pack(fill="x")
+        legend = "Verde: top 3 recomendados · violeta: top 10 · teal: en tu equipo · rojo: enemigo"
         _text(gin, legend, 10, C["txt3"]).pack(fill="x", pady=(6, 0))
 
         results = ctk.CTkFrame(self.scroll, fg_color="transparent")
@@ -178,13 +356,22 @@ class PicksTab(ctk.CTkFrame):
         self.rec_title = _text(rin, "RECOMENDADOS", 10, C["txt3"], bold=True)
         self.rec_title.pack(fill="x")
         _text(rin, "click en una fila para agregarlo a tu equipo", 10, C["txt3"]).pack(fill="x")
-        self.rec_list = ctk.CTkFrame(rin, fg_color="transparent")
-        self.rec_list.pack(fill="x", pady=(6, 0))
+        rec_list = ctk.CTkFrame(rin, fg_color="transparent")
+        rec_list.pack(fill="x", pady=(6, 0))
+        self.rec_rows = [RecRow(rec_list, on_click=lambda h: self._add(h, SIDES[0])) for _ in range(MAX_RECS)]
         abox, ain = card(results)
         abox.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
         _text(ain, "AVISOS DEL DRAFT", 10, C["txt3"], bold=True).pack(fill="x")
-        self.alert_list = ctk.CTkFrame(ain, fg_color="transparent")
-        self.alert_list.pack(fill="x", pady=(6, 0))
+        alert_list = ctk.CTkFrame(ain, fg_color="transparent")
+        alert_list.pack(fill="x", pady=(6, 0))
+        self.alert_rows = []
+        for _ in range(MAX_ALERTS):
+            row = ctk.CTkFrame(alert_list, fg_color=C["card"], corner_radius=8)
+            lbl = _text(row, "", 11, C["txt2"], wraplength=300, justify="left")
+            lbl.pack(fill="x", padx=8, pady=5)
+            self.alert_rows.append((row, lbl))
+        self.alert_empty = _text(alert_list, "Cargá picks enemigos para ver avisos.", 11, C["txt3"])
+        self.alert_empty.pack(fill="x")
         w = picks.DEFAULT_WEIGHTS
         weights = (f"Pesos: meta {w['meta']:.0%} · counters {w['counters']:.0%} · "
                    f"tus héroes {w['personal']:.0%} · posición {w['position']:.0%}")
@@ -210,66 +397,20 @@ class PicksTab(ctk.CTkFrame):
         self.slots[side] = slots
         self._refresh_markers()
 
-    def _build_grid(self):
-        for wdg in self.grid_body.winfo_children():
-            wdg.destroy()
-        for attr, label in ATTR_ORDER:
-            lbl = _text(self.grid_body, label, 10, C["txt3"], bold=True)
-            frame = ctk.CTkFrame(self.grid_body, fg_color="transparent")
-            self.attr_frames[attr] = (lbl, frame)
-        for hid, info in sorted(self.catalog.items(), key=lambda kv: kv[1]["name"]):
-            _, frame = self.attr_frames.get(info["attr"], self.attr_frames["all"])
-            tile = ctk.CTkButton(
-                frame, text=info["name"][:2].upper(), width=TILE[0], height=TILE[1], corner_radius=4,
-                fg_color=C["card"], hover_color=C["accent3"], border_width=1, border_color=C["border"],
-                text_color=C["txt2"], font=ctk.CTkFont(size=10, weight="bold"),
-                command=lambda h=hid: self._add(h),
-            )
-            tile.bind("<Enter>", lambda _e, n=info["name"]: self.hover.configure(text=n))
-            self.tiles[hid] = tile
-            self.npc_to_id[info["npc"]] = hid
-        self._layout_grid()
-        npcs = [info["npc"] for info in self.catalog.values()]
+    def _install_catalog(self):
+        self.grid.set_catalog(self.catalog)
+        npc_to_id = {info["npc"]: hid for hid, info in self.catalog.items()}
+
+        def ready(npc: str):
+            hid = npc_to_id.get(npc)
+            photo = hero_images.portrait_photo(npc, TILE)
+            if hid is not None and photo:
+                self.grid.set_photo(hid, photo)
+
         threading.Thread(
-            target=hero_images.ensure_portraits, args=(npcs, lambda n: self.after(0, self._set_tile_image, n)),
-            daemon=True,
+            target=hero_images.ensure_portraits,
+            args=([info["npc"] for info in self.catalog.values()], lambda n: self.after(0, ready, n)), daemon=True,
         ).start()
-
-    def _set_tile_image(self, npc: str):
-        hid = self.npc_to_id.get(npc)
-        img = hero_images.portrait_image(npc, TILE)
-        if hid in self.tiles and img:
-            self.tiles[hid].configure(image=img, text="")
-        for slots in self.slots.values():
-            for slot in slots:
-                if slot.hero_id == hid and img:
-                    slot.img.configure(image=img, text="")
-
-    def _layout_grid(self):
-        query = opendota._normalize_hero_name(self.search.get())
-        for attr, _ in ATTR_ORDER:
-            lbl, frame = self.attr_frames[attr]
-            lbl.pack_forget()
-            frame.pack_forget()
-            for tile in frame.winfo_children():
-                tile.grid_forget()
-            visible = [
-                hid for hid, info in sorted(self.catalog.items(), key=lambda kv: kv[1]["name"])
-                if info["attr"] == attr and (not query or query in opendota._normalize_hero_name(info["name"]))
-            ]
-            if not visible:
-                continue
-            lbl.pack(fill="x", pady=(6, 2))
-            frame.pack(fill="x")
-            for i, hid in enumerate(visible):
-                self.tiles[hid].grid(row=i // TILES_PER_ROW, column=i % TILES_PER_ROW, padx=2, pady=2)
-
-    def _visible_tiles(self) -> list[int]:
-        out = []
-        for attr, _ in ATTR_ORDER:
-            _, frame = self.attr_frames[attr]
-            out.extend(hid for hid, tile in self.tiles.items() if tile.master is frame and tile.winfo_manager())
-        return out
 
     # ── Draft ────────────────────────────────────────────────────────────────
     def _set_side(self, side: str):
@@ -284,8 +425,8 @@ class PicksTab(ctk.CTkFrame):
     def _taken(self) -> set[int]:
         return {s.hero_id for slots in self.slots.values() for s in slots if s.hero_id is not None}
 
-    def _add(self, hero_id: int, side: str | None = None):
-        if hero_id in self._taken():
+    def _add(self, hero_id: int | None, side: str | None = None):
+        if hero_id is None or hero_id in self._taken():
             return
         slots = self.slots[side or self.side]
         slot = next((s for s in slots if s.hero_id is None), None)
@@ -297,11 +438,12 @@ class PicksTab(ctk.CTkFrame):
         self._schedule_recompute()
 
     def _add_first_visible(self):
-        visible = [h for h in self._visible_tiles() if h not in self._taken()]
+        taken = self._taken()
+        visible = [h for h in self.grid.visible_ids() if h not in taken]
         if visible:
             self._add(visible[0])
             self.search.delete(0, "end")
-            self._layout_grid()
+            self.grid.set_filter("")
 
     def _remove(self, side: str, index: int):
         self.slots[side][index].clear()
@@ -328,8 +470,9 @@ class PicksTab(ctk.CTkFrame):
         enemy_pos: dict[int, int] = {}
         if self.pos_var.get():
             for s in self.slots[SIDES[1]]:
-                if s.hero_id is not None and s.pos_value():
-                    enemy_pos[s.hero_id] = s.pos_value()  # type: ignore[assignment]
+                pos = s.pos_value()
+                if s.hero_id is not None and pos:
+                    enemy_pos[s.hero_id] = pos
         return picks.DraftState(my_pos=my_pos, allies=allies, enemies=enemies, enemy_pos=enemy_pos)
 
     # ── Cuentas y datos ──────────────────────────────────────────────────────
@@ -369,7 +512,7 @@ class PicksTab(ctk.CTkFrame):
         hero_map = self.ctx.hero_map()
         self.data.hero_names = dict(hero_map)
         self.catalog = opendota.get_hero_catalog()
-        self.after(0, self._build_grid)
+        self.after(0, self._install_catalog)
 
         self.data.hero_stats = picks.fetch_hero_stats(cfg.opendota_stats_ttl_seconds)
         roles, patch, _ = dota2protracker.fetch_meta_roles(cfg.meta_grids_ttl_seconds)
@@ -416,59 +559,29 @@ class PicksTab(ctk.CTkFrame):
         self.data_status.configure(text=f"{meta_txt} · {counters} · bracket {bracket}",
                                    text_color=C["amber"] if pending else C["txt3"])
 
-        recs = picks.recommend(state, self.data, limit=10)
-        self._highlight(state, [r.hero_id for r in recs])
+        recs = picks.recommend(state, self.data, limit=MAX_RECS)
+        self.grid.set_states(set(state.allies), set(state.enemies), [r.hero_id for r in recs])
         title = f"RECOMENDADOS PARA {POS_LABELS[state.my_pos - 1].upper()}" if state.my_pos else "RECOMENDADOS"
         self.rec_title.configure(text=f"{title} · {len(state.enemies)} enemigo(s)")
-        for wdg in self.rec_list.winfo_children():
-            wdg.destroy()
-        for i, r in enumerate(recs, 1):
-            self._rec_row(i, r)
-
-        for wdg in self.alert_list.winfo_children():
-            wdg.destroy()
-        alerts = picks.draft_alerts(state, self.data)
-        if not alerts:
-            _text(self.alert_list, "Cargá picks enemigos para ver avisos.", 11, C["txt3"]).pack(fill="x")
-        for tone, text in alerts:
-            row = ctk.CTkFrame(self.alert_list, fg_color=C["card"], corner_radius=8)
-            row.pack(fill="x", pady=2)
-            color = C["amber"] if tone == "warn" else C["green"]
-            _text(row, ("⚠ " if tone == "warn" else "✔ ") + text, 11, color, wraplength=300,
-                  justify="left").pack(fill="x", padx=8, pady=5)
-
-    def _highlight(self, state: picks.DraftState, rec_ids: list[int]):
-        allies, enemies = set(state.allies), set(state.enemies)
-        for hid, tile in self.tiles.items():
-            if hid in allies:
-                tile.configure(border_color=C["dst"], border_width=2, state="disabled")
-            elif hid in enemies:
-                tile.configure(border_color=C["red"], border_width=2, state="disabled")
-            elif hid in rec_ids[:3]:
-                tile.configure(border_color=C["green"], border_width=3, state="normal")
-            elif hid in rec_ids:
-                tile.configure(border_color=C["accent"], border_width=2, state="normal")
+        for i, row in enumerate(self.rec_rows):
+            if i < len(recs):
+                r = recs[i]
+                npc = self.catalog.get(r.hero_id, {}).get("npc", "")
+                row.update_rec(i + 1, r, hero_images.portrait_image(npc, TILE))
+                row.pack(fill="x", pady=(0, 6))
             else:
-                tile.configure(border_color=C["border"], border_width=1, state="normal")
+                row.pack_forget()
 
-    def _rec_row(self, rank: int, r: picks.Recommendation):
-        row = ctk.CTkFrame(self.rec_list, fg_color="transparent")
-        row.pack(fill="x", pady=(0, 6))
-        row.columnconfigure(2, weight=1)
-        info = self.catalog.get(r.hero_id, {})
-        img = hero_images.portrait_image(info.get("npc", ""), TILE)
-        _text(row, str(rank), 12, C["txt3"], bold=True, width=22).grid(row=0, column=0, rowspan=3, sticky="n")
-        pic = ctk.CTkLabel(row, text="" if img else r.name[:2].upper(), image=img, width=TILE[0], height=TILE[1],
-                           fg_color=C["card"], corner_radius=4)
-        pic.grid(row=0, column=1, rowspan=3, padx=(0, 8), sticky="n")
-        _text(row, r.name, 13, C["txt"], bold=True).grid(row=0, column=2, sticky="w")
-        _text(row, f"{r.score:.0f}", 17, C["accent"], bold=True).grid(row=0, column=3, rowspan=2, sticky="e")
-        _text(row, r.reason, 11, C["txt2"], wraplength=330, justify="left").grid(row=1, column=2, sticky="w")
-        chips = ctk.CTkFrame(row, fg_color="transparent")
-        chips.grid(row=2, column=2, columnspan=2, sticky="w", pady=(2, 0))
-        for text, tone in r.chips[:6]:
-            bg, fg = CHIP_COLORS.get(tone, CHIP_COLORS[""])
-            ctk.CTkLabel(chips, text=text, font=ctk.CTkFont(size=10), fg_color=bg, text_color=fg,
-                         corner_radius=4, padx=6, pady=1).pack(side="left", padx=(0, 4), pady=1)
-        for wdg in (row, pic, *row.winfo_children()):
-            wdg.bind("<Button-1>", lambda _e, h=r.hero_id: self._add(h, SIDES[0]))
+        alerts = picks.draft_alerts(state, self.data, limit=MAX_ALERTS)
+        if alerts:
+            self.alert_empty.pack_forget()
+        else:
+            self.alert_empty.pack(fill="x")
+        for i, (row, lbl) in enumerate(self.alert_rows):
+            if i < len(alerts):
+                tone, text = alerts[i]
+                lbl.configure(text=("⚠ " if tone == "warn" else "✔ ") + text,
+                              text_color=C["amber"] if tone == "warn" else C["green"])
+                row.pack(fill="x", pady=2)
+            else:
+                row.pack_forget()

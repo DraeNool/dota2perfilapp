@@ -71,7 +71,7 @@ def download_avatar(url: str, size: int = 48) -> ctk.CTkImage | None:
     try:
         r = http.SESSION.get(url, timeout=10)
         r.raise_for_status()
-        img = Image.open(io.BytesIO(r.content)).convert("RGB").resize((size, size), Image.LANCZOS)
+        img = Image.open(io.BytesIO(r.content)).convert("RGB").resize((size, size), Image.Resampling.LANCZOS)
         return ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
     except (requests.RequestException, OSError) as e:
         log.debug("No se pudo descargar avatar %s: %s", url, e)
