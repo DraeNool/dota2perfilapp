@@ -1,6 +1,9 @@
 # Configuración local con la API key — NO versionar
 config.json
 
+# Historial de medallas del usuario (lo escribe la pestaña Rendimiento)
+progress.json
+
 # Prototipo legacy con key hardcodeada — se conserva local, la versión pública
 # sanitizada es dota2_config_sync_meta_meta_favorites_recent20_v2_sanitized.py
 dota2_config_sync_meta_meta_favorites_recent20_v2.py
