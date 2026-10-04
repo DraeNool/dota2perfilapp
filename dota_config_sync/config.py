@@ -48,6 +48,8 @@ DEFAULTS = {
     "hero_map_ttl_seconds": 86400,     # listado de héroes (cambia muy poco)
     "opendota_min_interval": 1.1,      # segundos entre llamadas a OpenDota (~55/min < límite 60)
     "meta_grids_ttl_seconds": 3600,    # grids Meta de Dota2ProTracker (cambian con el parche)
+    "opendota_stats_ttl_seconds": 86400,  # heroStats y matchups (pesados, cambian poco)
+    "ranked_matches_limit": 200,       # partidas ranked que lee la pestaña Rendimiento
     "meta_meta": DEFAULT_META_META,
 }
 
@@ -119,6 +121,14 @@ class AppConfig:
     @property
     def meta_grids_ttl_seconds(self) -> int:
         return int(self._data.get("meta_grids_ttl_seconds", 3600))
+
+    @property
+    def opendota_stats_ttl_seconds(self) -> int:
+        return int(self._data.get("opendota_stats_ttl_seconds", 86400))
+
+    @property
+    def ranked_matches_limit(self) -> int:
+        return int(self._data.get("ranked_matches_limit", 200))
 
     @property
     def meta_meta(self) -> dict:

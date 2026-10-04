@@ -14,7 +14,9 @@ from . import __version__, autoexec, dota2protracker, fileops, hero_grid, http, 
 from .config import AppConfig
 from .paths import resource_path
 from .theme import C, download_avatar
-from .widgets import AccountCard, StatusBar
+from .ui_performance import PerformanceTab
+from .ui_picks import PicksTab
+from .widgets import AccountCard, StatusBar, TabContext
 
 ICON_FILE = "DotaConfigSyncByDraenool.ico"
 
@@ -66,10 +68,17 @@ class App(ctk.CTk):
 
         self.steam_path = None
         self.accounts = []
+        self.tab_ctx = TabContext(
+            cfg=cfg, log=self._log_async, status=self._set_status_async,
+            accounts=lambda: self.accounts, main_account=self._main_account, hero_map=opendota.get_hero_map,
+        )
 
         self._set_window_icon()
         self._build_ui()
         self._detect_steam()
+
+    def _main_account(self) -> dict | None:
+        return next((a for a in self.accounts if a["steam_id64"] == self.cfg.preferred_main_id64), None)
 
     def _set_window_icon(self):
         ico = resource_path(ICON_FILE)
@@ -101,11 +110,28 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=12), command=self._reload_profiles,
         ).pack(side="left", padx=(0, 8))
 
+        self.tabs = ctk.CTkTabview(
+            self, fg_color=C["bg"], corner_radius=10, border_width=0, anchor="w",
+            segmented_button_fg_color=C["header"], segmented_button_selected_color=C["accent2"],
+            segmented_button_selected_hover_color=C["accent3"], segmented_button_unselected_color=C["bg2"],
+            segmented_button_unselected_hover_color=C["card"], text_color=C["txt"],
+        )
+        self.tabs.pack(fill="both", expand=True, padx=8, pady=(6, 0))
+        for name in ("Picks", "Rendimiento", "Perfiles"):
+            self.tabs.add(name)
+        self.tabs._segmented_button.configure(font=ctk.CTkFont(size=13, weight="bold"))
+
+        self.picks_tab = PicksTab(self.tabs.tab("Picks"), self.tab_ctx)
+        self.picks_tab.pack(fill="both", expand=True)
+        self.perf_tab = PerformanceTab(self.tabs.tab("Rendimiento"), self.tab_ctx)
+        self.perf_tab.pack(fill="both", expand=True)
+
         self.scroll = ctk.CTkScrollableFrame(
-            self, fg_color="transparent", scrollbar_button_color=C["border"],
+            self.tabs.tab("Perfiles"), fg_color="transparent", scrollbar_button_color=C["border"],
             scrollbar_button_hover_color=C["accent2"],
         )
-        self.scroll.pack(fill="both", expand=True, padx=20, pady=(16, 0))
+        self.scroll.pack(fill="both", expand=True, padx=12, pady=(4, 0))
+        self.tabs.set(os.environ.get("DCS_START_TAB", "Picks"))
 
         self._build_api_key_row()
 
@@ -441,6 +467,8 @@ class App(ctk.CTk):
         self.card_dst.load_accounts(accounts)
         self._load_grid_targets()
         self._preload_hero_map()
+        self.picks_tab.set_accounts()
+        self.perf_tab.set_accounts()
         self.status.set(f"{len(accounts)} cuenta(s) encontradas", "ok")
         self.status.set_right(r"userdata\...\570")
 

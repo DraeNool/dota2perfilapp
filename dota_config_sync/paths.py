@@ -32,6 +32,11 @@ def config_path() -> Path:
     return app_base_dir() / "config.json"
 
 
+def progress_path() -> Path:
+    """Historial de medallas por cuenta (no es caché: no se borra al limpiar .cache)."""
+    return app_base_dir() / "progress.json"
+
+
 def cache_dir() -> Path:
     d = app_base_dir() / ".cache"
     d.mkdir(parents=True, exist_ok=True)

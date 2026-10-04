@@ -196,6 +196,147 @@ def test_generate_backs_up_existing(tmp_path):
     assert backups[0].read_text(encoding="utf-8") == "// viejo\n"
 
 
+# ── picks (puntuación pura) ────────────────────────────────────────────────────
+def _pick_data():
+    from dota_config_sync import picks
+
+    names = {1: "Anti-Mage", 2: "Axe", 3: "Bane", 12: "Phantom Lancer", 55: "Dark Seer", 93: "Slark"}
+    stats = {
+        2: {"7_pick": 10000, "7_win": 5300, "pub_pick": 100000, "pub_win": 50000},
+        55: {"7_pick": 8000, "7_win": 4400, "pub_pick": 80000, "pub_win": 40000},
+        93: {"7_pick": 9000, "7_win": 4300, "pub_pick": 90000, "pub_win": 45000},
+        1: {"7_pick": 9000, "7_win": 4500},
+        3: {"7_pick": 3000, "7_win": 1500},
+    }
+    # Tabla del ENEMIGO (PL, id 12): victorias de PL contra cada héroe.
+    matchups = {
+        12: {
+            2: (2000, 800),      # Axe gana 60 % vs PL
+            55: (2000, 900),     # Dark Seer 55 % vs PL
+            93: (2000, 1100),    # Slark 45 % vs PL
+            1: (2000, 1000),
+        },
+    }
+    player = {
+        55: {"hero_id": "55", "games": 31, "win": 20, "against_games": 10, "against_win": 3},
+        93: {"hero_id": "93", "games": 14, "win": 6},
+        12: {"hero_id": "12", "games": 2, "win": 1, "against_games": 12, "against_win": 4},
+    }
+    rel = picks.D2ptRelations(best_with={55: {3}}, best_against={2: {12}})
+    return picks.PickData(
+        hero_names=names, hero_stats=stats, matchups=matchups, player_heroes=player,
+        roles={"pos 3": [2, 55, 93]}, relations=rel, bracket=7,
+    )
+
+
+def test_bracket_from_rank_tier():
+    from dota_config_sync.picks import bracket_from_rank_tier
+
+    assert bracket_from_rank_tier(75) == 7
+    assert bracket_from_rank_tier(None) is None
+    assert bracket_from_rank_tier(80) == 8
+
+
+def test_recommend_ranks_counter_and_own_hero_first_and_skips_taken():
+    from dota_config_sync import picks
+
+    state = picks.DraftState(my_pos=3, allies=[3], enemies=[12], bans=[1])
+    recs = picks.recommend(state, _pick_data(), limit=5)
+    order = [r.hero_id for r in recs]
+    assert 1 not in order and 12 not in order and 3 not in order
+    assert order[:2] in ([55, 2], [2, 55])            # Dark Seer (propio+sinergia) y Axe (counter) arriba
+    assert order.index(93) > order.index(55)           # Slark pierde vs PL y tiene mal winrate propio
+    dark_seer = next(r for r in recs if r.hero_id == 55)
+    assert any("Best with Bane" in c for c, _ in dark_seer.chips)
+    assert "counter de phantom lancer" in dark_seer.reason.lower()
+
+
+def test_meta_winrate_falls_back_to_pub_when_bracket_missing():
+    from dota_config_sync.picks import meta_winrate
+
+    wr, picks_n = meta_winrate({"pub_pick": 1000, "pub_win": 600}, bracket=7)
+    assert picks_n == 1000 and 0.55 < wr < 0.6
+    assert meta_winrate(None, 7) == (0.5, 0)
+
+
+def test_draft_alerts_warn_on_weak_matchup_and_history():
+    from dota_config_sync import picks
+
+    state = picks.DraftState(my_pos=3, allies=[55, 3], enemies=[12])
+    alerts = picks.draft_alerts(state, _pick_data())
+    texts = [t for _, t in alerts]
+    assert any("Slark pierde 55%" in t for t in texts)
+    assert any("Históricamente perdés 67%" in t for t in texts)
+    assert any("Dark Seer + Bane" in t for t in texts)
+
+
+def test_parse_d2pt_relations_groups_rows_by_y_position():
+    from dota_config_sync import picks
+
+    cfg = {"categories": [
+        {"category_name": "Top Heroes Pos 1", "y_position": 0, "x_position": 0, "hero_ids": [11, 48]},
+        {"category_name": "Best with", "y_position": 20, "x_position": 75, "hero_ids": [62, 90]},
+        {"category_name": "Worst against", "y_position": 20, "x_position": 945, "hero_ids": [128]},
+        {"category_name": "Best with", "y_position": 95, "x_position": 75, "hero_ids": [83]},
+    ]}
+    rel = picks.parse_d2pt_relations([cfg])
+    assert rel.best_with == {11: {62, 90}, 48: {83}}
+    assert rel.worst_against == {11: {128}}
+
+
+# ── performance (resumen y MMR estimado, sin red) ──────────────────────────────
+def _match(win, hero=55, rank=75, start=1_790_000_000, party=1, k=5, d=3, a=10):
+    return {"player_slot": 1, "radiant_win": win, "hero_id": hero, "average_rank": rank,
+            "start_time": start, "party_size": party, "kills": k, "deaths": d, "assists": a}
+
+
+def test_mmr_from_rank_tier():
+    from dota_config_sync.performance import mmr_from_rank_tier
+
+    assert mmr_from_rank_tier(75) == 4620 + 4 * 200 + 100
+    assert mmr_from_rank_tier(11) == 77
+    assert mmr_from_rank_tier(80) == 5620
+    assert mmr_from_rank_tier(None) is None
+
+
+def test_estimate_mmr_series_anchors_and_results():
+    from dota_config_sync.performance import estimate_mmr_series
+
+    newest_first = [_match(True, rank=75), _match(False, rank=None), _match(True, rank=74)]
+    series = estimate_mmr_series(newest_first)
+    assert [m["average_rank"] for m, _ in series] == [74, None, 75]  # orden cronológico
+    assert series[0][1] == 4620 + 3 * 200 + 100 + 25
+    assert series[1][1] is not None  # ancla arrastrada de la partida anterior
+
+
+def test_summarize_windows_streak_party_and_heroes():
+    from dota_config_sync.performance import summarize
+
+    ms = [_match(True), _match(True, party=3), _match(False, hero=93), _match(True, hero=93)]
+    s = summarize(ms)
+    assert s["total"] == 4
+    assert s["windows"][20] == (3, 1, 0.75)
+    assert s["streak"] == 2
+    assert s["party"] == (1, 1, 1.0) and s["solo"] == (2, 3, 2 / 3)
+    heroes = {h["hero_id"]: h for h in s["heroes"]}
+    assert heroes[55]["games"] == 2 and heroes[55]["wr"] == 1.0
+    assert heroes[93]["wr"] == 0.5 and heroes[93]["kda"] == 5.0
+
+
+def test_record_snapshot_once_per_day(monkeypatch, tmp_path):
+    from datetime import date
+
+    from dota_config_sync import performance
+
+    monkeypatch.setattr(performance, "progress_path", lambda: tmp_path / "progress.json")
+    h = performance.record_snapshot("1", 74, date(2026, 9, 1))
+    h = performance.record_snapshot("1", 75, date(2026, 9, 1))   # mismo día: reemplaza
+    h = performance.record_snapshot("1", 75, date(2026, 9, 2))   # sin cambio: no agrega
+    h = performance.record_snapshot("1", 76, date(2026, 9, 3))
+    assert h == [{"date": "2026-09-01", "rank_tier": 75}, {"date": "2026-09-03", "rank_tier": 76}]
+    assert performance.load_progress()["1"] == h
+
+
 # ── dota2protracker (parseo del payload embebido, sin red) ─────────────────────
 _D2PT_FIXTURE = (
     'garbage before... "data":{grids:{matches:{configs:'

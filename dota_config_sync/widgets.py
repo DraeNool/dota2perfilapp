@@ -1,8 +1,38 @@
-"""Widgets reutilizables: barra de estado y tarjeta de cuenta."""
+"""Widgets reutilizables: barra de estado, tarjeta de cuenta y contexto que comparten las pestañas."""
+
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import customtkinter as ctk
 
+from .config import AppConfig
 from .theme import C, make_avatar_placeholder, medal_for_tier
+
+
+@dataclass
+class TabContext:
+    """Lo que una pestaña necesita de la app sin acoplarse a la ventana principal."""
+
+    cfg: AppConfig
+    log: Callable[[str], None]            # seguro desde cualquier hilo
+    status: Callable[[str, str], None]    # (texto, estado) seguro desde cualquier hilo
+    accounts: Callable[[], list[dict]]
+    main_account: Callable[[], dict | None]
+    hero_map: Callable[[], dict[int, str]]
+
+
+def section_label(parent, text: str, pady=(12, 0)) -> ctk.CTkLabel:
+    lbl = ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(size=10, weight="bold"), text_color=C["txt3"], anchor="w")
+    lbl.pack(anchor="w", pady=pady)
+    return lbl
+
+
+def card(parent, border: str | None = None) -> tuple[ctk.CTkFrame, ctk.CTkFrame]:
+    """(caja, interior) con el estilo de tarjeta de la app."""
+    box = ctk.CTkFrame(parent, fg_color=C["bg2"], corner_radius=12, border_width=1, border_color=border or C["border"])
+    inner = ctk.CTkFrame(box, fg_color="transparent")
+    inner.pack(fill="both", expand=True, padx=16, pady=14)
+    return box, inner
 
 
 class StatusBar(ctk.CTkFrame):
