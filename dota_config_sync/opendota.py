@@ -10,6 +10,7 @@ from . import http
 log = logging.getLogger(__name__)
 
 _HERO_MAP_CACHE: dict[int, str] | None = None
+_HERO_CATALOG: dict[int, dict] = {}
 _HERO_MAP_LOCK = threading.Lock()
 _HERO_MAP_TTL = 86400
 
@@ -64,10 +65,22 @@ def get_hero_map() -> dict[int, str]:
                     if hid is None:
                         continue
                     out[hid] = str(hero.get("localized_name") or hero.get("name") or f"Hero #{hid}")
+                    _HERO_CATALOG[hid] = {
+                        "name": out[hid],
+                        "npc": str(hero.get("name") or "").removeprefix("npc_dota_hero_"),
+                        "attr": str(hero.get("primary_attr") or "all"),
+                        "roles": list(hero.get("roles") or []),
+                    }
         except http.requests.RequestException as e:
             log.warning("No se pudo descargar el hero map: %s", e)
         _HERO_MAP_CACHE = out
         return _HERO_MAP_CACHE
+
+
+def get_hero_catalog() -> dict[int, dict]:
+    """{hero_id: {name, npc, attr ('str'|'agi'|'int'|'all'), roles}} — misma descarga que el hero map."""
+    get_hero_map()
+    return dict(_HERO_CATALOG)
 
 
 def hero_id_lookup() -> dict[str, int]:

@@ -152,11 +152,93 @@ def summarize(matches_newest_first: list[dict]) -> dict:
         })
     heroes.sort(key=lambda h: (h["games"], h["wr"]), reverse=True)
 
+    def avg_minutes(pred) -> float | None:
+        durs = [int(m.get("duration") or 0) for m, w in zip(ms, wins, strict=True) if pred(w)]
+        return sum(durs) / len(durs) / 60 if durs else None
+
     return {
         "total": len(ms), "windows": windows, "streak": streak,
         "solo": solo, "party": party, "periods": periods, "heroes": heroes,
+        "avg_minutes_win": avg_minutes(lambda w: w), "avg_minutes_loss": avg_minutes(lambda w: not w),
         "last_start": int(ms[0].get("start_time") or 0) if ms else None,
     }
+
+
+# ── Lectura: de los números a frases que dicen qué hacer ──────────────────────
+def next_medal(rank_tier: int | None, est_mmr: int | None) -> dict | None:
+    """Siguiente medalla/estrella, MMR que falta (según la estimación) y victorias netas a +25."""
+    if not rank_tier:
+        return None
+    main, stars = int(rank_tier) // 10, int(rank_tier) % 10
+    if main not in _MEDAL_MMR or main >= 8:
+        return None
+    base, step = _MEDAL_MMR[main]
+    if stars < 5:
+        target_tier, threshold = main * 10 + stars + 1, base + stars * step
+    else:
+        target_tier, threshold = (main + 1) * 10 + 1, _MEDAL_MMR[main + 1][0]
+    missing = max(0, threshold - est_mmr) if est_mmr is not None else None
+    wins = -(-missing // MMR_PER_RESULT) if missing is not None else None
+    return {"target_tier": target_tier, "threshold": threshold, "missing_mmr": missing, "net_wins": wins}
+
+
+def insights(summary: dict, hero_names: dict[int, str] | None = None) -> list[tuple[str, str]]:
+    """[(tono "ok"|"warn"|"info", frase)] con lo que los números dicen que hagas."""
+    names = hero_names or {}
+    out: list[tuple[str, str]] = []
+    pct = lambda r: f"{r:.0%}"  # noqa: E731
+
+    _, _, r20 = summary["windows"][20]
+    _, _, r50 = summary["windows"][50]
+    if r20 is not None and r50 is not None and summary["total"] >= 30:
+        if r20 - r50 >= 0.07:
+            out.append(("ok", f"Vas en subida: {pct(r20)} en las últimas 20 contra {pct(r50)} en las últimas 50."))
+        elif r50 - r20 >= 0.07:
+            out.append(("warn", f"Vas en bajada: {pct(r20)} en las últimas 20 contra {pct(r50)} en las últimas 50. "
+                                "Revisá qué cambió: héroes nuevos, horario, party."))
+        else:
+            out.append(("info", f"Estable: {pct(r20)} en las últimas 20, {pct(r50)} en 50."))
+
+    sw, sg, sr = summary["solo"]
+    pw, pg, pr = summary["party"]
+    if sg >= 15 and pg >= 15 and sr is not None and pr is not None and abs(sr - pr) >= 0.08:
+        better, worse = ("solo", "party") if sr > pr else ("party", "solo")
+        out.append(("info", f"Rendís mejor {better} ({pct(max(sr, pr))}) que en {worse} ({pct(min(sr, pr))}). "
+                            f"Si el objetivo es MMR, priorizá jugar {better}."))
+
+    periods = [(n, g, r) for n, (_, g, r) in summary["periods"].items() if g >= 15 and r is not None]
+    if len(periods) >= 2:
+        best = max(periods, key=lambda t: t[2])
+        worst = min(periods, key=lambda t: t[2])
+        if best[2] - worst[2] >= 0.10:
+            out.append(("info", f"Tu mejor horario es la {best[0]} ({pct(best[2])}, {best[1]} pj); "
+                                f"la {worst[0]} te rinde {pct(worst[2])}."))
+
+    good = [h for h in summary["heroes"] if h["games"] >= 8 and h["wr"] >= 0.55]
+    bad = [h for h in summary["heroes"] if h["games"] >= 8 and h["wr"] < 0.45]
+    if good:
+        top = ", ".join(f"{names.get(h['hero_id'], h['hero_id'])} {pct(h['wr'])} ({h['games']})" for h in good[:3])
+        out.append(("ok", f"Tus héroes que suman: {top}. Spamearlos es la vía más corta a subir."))
+    if bad:
+        low = ", ".join(f"{names.get(h['hero_id'], h['hero_id'])} {pct(h['wr'])} ({h['games']})" for h in bad[:2])
+        out.append(("warn", f"Te restan: {low}. Practicalos en unranked antes de volver a pickearlos."))
+
+    streak = summary["streak"]
+    if streak <= -3:
+        out.append(("warn", f"Racha de {-streak} derrotas seguidas: cortá la sesión. "
+                            "Después de 3 el tilt pesa más que el skill."))
+    elif streak >= 3:
+        out.append(("ok", f"Racha de {streak} victorias: buen momento para seguir con tus héroes seguros."))
+
+    mw, ml = summary.get("avg_minutes_win"), summary.get("avg_minutes_loss")
+    if mw and ml:
+        if ml - mw >= 5:
+            out.append(("info", f"Tus derrotas duran {ml - mw:.0f} min más que tus victorias ({ml:.0f} vs {mw:.0f}): "
+                                "perdés las largas. Cerrá antes o pickeá héroes que escalen."))
+        elif mw - ml >= 5:
+            out.append(("info", f"Ganás las largas ({mw:.0f} min) y perdés rápido ({ml:.0f} min): "
+                                "cuando la línea sale mal, defendé y estirá."))
+    return out
 
 
 # ── Historial de medalla (progress.json) ─────────────────────────────────────

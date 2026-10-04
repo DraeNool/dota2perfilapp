@@ -68,6 +68,7 @@ class App(ctk.CTk):
 
         self.steam_path = None
         self.accounts = []
+        self._profiles_loaded = False
         self.tab_ctx = TabContext(
             cfg=cfg, log=self._log_async, status=self._set_status_async,
             accounts=lambda: self.accounts, main_account=self._main_account, hero_map=opendota.get_hero_map,
@@ -111,7 +112,7 @@ class App(ctk.CTk):
         ).pack(side="left", padx=(0, 8))
 
         self.tabs = ctk.CTkTabview(
-            self, fg_color=C["bg"], corner_radius=10, border_width=0, anchor="w",
+            self, fg_color=C["bg"], corner_radius=10, border_width=0, anchor="w", command=self._on_tab_change,
             segmented_button_fg_color=C["header"], segmented_button_selected_color=C["accent2"],
             segmented_button_selected_hover_color=C["accent3"], segmented_button_unselected_color=C["bg2"],
             segmented_button_unselected_hover_color=C["card"], text_color=C["txt"],
@@ -483,7 +484,12 @@ class App(ctk.CTk):
             self.card_dst.select_by_index(dst_idx)
 
         self._update_op_desc()
-        self._reload_profiles()
+
+    def _on_tab_change(self):
+        """Los perfiles (48 llamadas a OpenDota/Steam) se cargan la primera vez que se entra a Perfiles."""
+        if self.tabs.get() == "Perfiles" and not self._profiles_loaded and self.accounts:
+            self._profiles_loaded = True
+            self._reload_profiles()
 
     # ── Perfiles ─────────────────────────────────────────────────────────────
     def _reload_profiles(self):

@@ -214,10 +214,23 @@ def hero_vs_enemy(hero: int, enemy: int, data: PickData) -> tuple[int, float] | 
     return games, matchup_winrate(games, games - enemy_wins)
 
 
-def _counter_delta(hero: int, enemies: list[int], data: PickData) -> tuple[float, int | None, int]:
-    """(delta medio vs enemigos, enemigo que mejor countereás, enemigos con dato)."""
-    deltas: list[tuple[float, int]] = []
-    for e in enemies:
+# Con quién se cruza cada posición en la fase de líneas (safe vs offlane, mid vs mid).
+LANE_OPPONENTS = {1: {3, 4}, 5: {3, 4}, 3: {1, 5}, 4: {1, 5}, 2: {2}}
+LANE_WEIGHT = 1.5
+
+
+def is_lane_opponent(my_pos: int | None, enemy_pos: int | None) -> bool:
+    return bool(my_pos and enemy_pos and enemy_pos in LANE_OPPONENTS.get(my_pos, set()))
+
+
+def _counter_delta(hero: int, state: DraftState, data: PickData) -> tuple[float, int | None, int]:
+    """
+    (delta medio vs enemigos, enemigo que mejor countereás, enemigos con dato).
+
+    El rival de tu línea pesa LANE_WEIGHT: ahí se decide la partida temprana.
+    """
+    deltas: list[tuple[float, int, float]] = []
+    for e in state.enemies:
         d = 0.0
         known = False
         vs = hero_vs_enemy(hero, e, data)
@@ -231,11 +244,13 @@ def _counter_delta(hero: int, enemies: list[int], data: PickData) -> tuple[float
             d -= 0.02
             known = True
         if known:
-            deltas.append((d, e))
+            w = LANE_WEIGHT if is_lane_opponent(state.my_pos, state.enemy_pos.get(e)) else 1.0
+            deltas.append((d, e, w))
     if not deltas:
         return 0.0, None, 0
-    best = max(deltas)
-    return sum(d for d, _ in deltas) / len(deltas), (best[1] if best[0] > 0.03 else None), len(deltas)
+    best = max(deltas, key=lambda t: t[0] * t[2])
+    weighted = sum(d * w for d, _, w in deltas) / sum(w for _, _, w in deltas)
+    return weighted, (best[1] if best[0] > 0.03 else None), len(deltas)
 
 
 def score_hero(hero: int, state: DraftState, data: PickData,
@@ -248,11 +263,17 @@ def score_hero(hero: int, state: DraftState, data: PickData,
     bracket_txt = BRACKET_NAMES.get(data.bracket or 0, "pub")
     chips.append((f"Meta {wr:.0%} · {bracket_txt}", "g" if wr >= 0.53 else "r" if wr <= 0.47 else ""))
 
-    delta, best_target, known = _counter_delta(hero, state.enemies, data)
+    delta, best_target, known = _counter_delta(hero, state, data)
     parts["counters"] = _clamp(0.5 + delta / 0.16) if known else 0.5
     if state.enemies:
         tone = "g" if delta >= 0.03 else "r" if delta <= -0.03 else ""
         chips.append((f"{delta:+.0%} vs enemigos" if known else "sin dato vs enemigos", tone))
+        lane = [e for e in state.enemies if is_lane_opponent(state.my_pos, state.enemy_pos.get(e))]
+        for e in lane:
+            vs = hero_vs_enemy(hero, e, data)
+            if vs:
+                lane_tone = "g" if vs[1] >= 0.53 else "r" if vs[1] <= 0.47 else ""
+                chips.append((f"{vs[1] - 0.5:+.0%} vs {data.name(e)} (tu línea)", lane_tone))
 
     adj, conf, games = personal_rate(data.player_heroes.get(hero))
     parts["personal"] = _clamp(0.5 + conf * (adj - 0.5) / 0.15) if games else 0.42

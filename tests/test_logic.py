@@ -251,6 +251,54 @@ def test_recommend_ranks_counter_and_own_hero_first_and_skips_taken():
     assert "counter de phantom lancer" in dark_seer.reason.lower()
 
 
+def test_lane_opponent_weighs_more_in_counters():
+    from dota_config_sync import picks
+
+    data = _pick_data()
+    data.matchups[12][1] = (2000, 1200)        # Anti-Mage pierde 40 % vs PL
+    data.matchups[3] = {1: (2000, 800)}        # ...pero gana 60 % vs Bane
+    base = picks.DraftState(my_pos=3, enemies=[12, 3])
+    lane = picks.DraftState(my_pos=3, enemies=[12, 3], enemy_pos={12: 1})   # PL es el carry: tu línea
+    assert picks.is_lane_opponent(3, 1) and not picks.is_lane_opponent(3, 2)
+    d_base = picks.score_hero(1, base, data).parts["counters"]
+    d_lane = picks.score_hero(1, lane, data).parts["counters"]
+    assert d_lane < d_base                      # el mal matchup de línea pesa más
+    assert any("(tu línea)" in c for c, _ in picks.score_hero(1, lane, data).chips)
+
+
+def test_next_medal_thresholds():
+    from dota_config_sync.performance import next_medal
+
+    nm = next_medal(75, 5032)
+    assert nm == {"target_tier": 81, "threshold": 5620, "missing_mmr": 588, "net_wins": 24}
+    assert next_medal(73, 5300)["target_tier"] == 74
+    assert next_medal(80, 6000) is None
+    assert next_medal(None, 5000) is None
+
+
+def test_insights_read_the_numbers():
+    from dota_config_sync.performance import insights
+
+    summary = {
+        "total": 60,
+        "windows": {20: (13, 7, 0.65), 50: (28, 22, 0.56), 100: (0, 0, None)},
+        "streak": -3,
+        "solo": (20, 30, 2 / 3), "party": (9, 20, 0.45),
+        "periods": {"mañana": (10, 16, 0.625), "tarde": (5, 20, 0.25), "noche": (6, 10, 0.6)},
+        "heroes": [{"hero_id": 55, "games": 19, "wins": 12, "wr": 12 / 19, "kda": 5.9, "trend": "↑"},
+                   {"hero_id": 93, "games": 14, "wins": 6, "wr": 6 / 14, "kda": 2.1, "trend": "↓"}],
+        "avg_minutes_win": 36.0, "avg_minutes_loss": 43.0,
+    }
+    found = insights(summary, {55: "Dark Seer", 93: "Slark"})
+    text = " | ".join(t for _, t in found)
+    assert "Vas en subida" in text
+    assert "mejor solo" in text
+    assert "mejor horario es la mañana" in text
+    assert "Dark Seer 63% (19)" in text and "Slark 43% (14)" in text
+    assert "3 derrotas seguidas" in text
+    assert "derrotas duran 7 min más" in text
+
+
 def test_meta_winrate_falls_back_to_pub_when_bracket_missing():
     from dota_config_sync.picks import meta_winrate
 

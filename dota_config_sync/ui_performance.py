@@ -77,6 +77,13 @@ class PerformanceTab(ctk.CTkFrame):
                                                ("last20", "ÚLTIMAS 20"), ("streak", "RACHA")))
         }
 
+        ibox, iin = card(self.scroll, C["accent2"])
+        ibox.pack(fill="x", pady=(12, 0))
+        _text(iin, "LECTURA · qué dicen tus números", 10, C["accent"], bold=True).pack(fill="x")
+        self.insights_box = ctk.CTkFrame(iin, fg_color="transparent")
+        self.insights_box.pack(fill="x", pady=(6, 0))
+        _text(self.insights_box, "Se completa al cargar las partidas.", 11, C["txt3"]).pack(fill="x")
+
         mid = ctk.CTkFrame(self.scroll, fg_color="transparent")
         mid.pack(fill="x", pady=(12, 0))
         mid.columnconfigure(0, weight=5, uniform="mid")
@@ -160,7 +167,27 @@ class PerformanceTab(ctk.CTkFrame):
 
         est = [e for _, e in series if e is not None]
         self.tiles["mmr"][0].configure(text=f"≈ {est[-1]:,}".replace(",", " ") if est else "N/D")
-        self.tiles["mmr"][1].configure(text="por rango promedio del lobby")
+        nm = performance.next_medal(rank_tier, est[-1] if est else None)
+        if nm and nm["missing_mmr"] is not None:
+            target, _, tstars = medal_for_tier(nm["target_tier"])
+            self.tiles["mmr"][1].configure(
+                text=f"→ {target}{' ★' * tstars}: faltan ≈ {nm['missing_mmr']} MMR ({nm['net_wins']} victorias netas)",
+            )
+        else:
+            self.tiles["mmr"][1].configure(text="por rango promedio del lobby")
+
+        for wdg in self.insights_box.winfo_children():
+            wdg.destroy()
+        found = performance.insights(summary, self.ctx.hero_map())
+        if not found:
+            _text(self.insights_box, "Todavía no hay suficientes partidas para leer una tendencia.", 11,
+                  C["txt3"]).pack(fill="x")
+        for tone, text in found:
+            color = {"ok": C["green"], "warn": C["amber"]}.get(tone, C["txt"])
+            mark = {"ok": "✔", "warn": "⚠"}.get(tone, "•")
+            row = ctk.CTkFrame(self.insights_box, fg_color=C["card"], corner_radius=8)
+            row.pack(fill="x", pady=2)
+            _text(row, f"{mark}  {text}", 12, color, wraplength=760, justify="left").pack(fill="x", padx=10, pady=6)
 
         w, lose, rate = summary["windows"][20]
         self.tiles["last20"][0].configure(text=_pct(rate), text_color=_rate_color(rate))
