@@ -392,13 +392,33 @@ def test_recommend_and_first_picks_carry_tiers():
     from dota_config_sync import picks
 
     data = _pick_data()
-    recs = picks.recommend(picks.DraftState(my_pos=3, enemies=[12]), data)
+    state = picks.DraftState(my_pos=3, enemies=[12])
+    recs = picks.recommend(state, data)
     assert all(r.tier for r in recs)
-    assert recs[0].tier == picks.tier_for(recs[0].score, 1, len(data.hero_names) - 1)
+    assert recs[0].tier == picks.tier_for(recs[0].score, 1, len(picks.rank_all(state, data)))
     order = picks.TIER_ORDER
     assert all(order.index(a.tier) <= order.index(b.tier) for a, b in zip(recs, recs[1:], strict=False))
     firsts = picks.meta_first_picks(picks.DraftState(my_pos=3), data)
     assert firsts and all(f.tier for f in firsts)
+
+
+def test_heroes_without_sample_are_hidden():
+    from dota_config_sync import picks
+
+    data = _pick_data()
+    # Con enemigos y sus tablas bajadas: Bane (3) no aparece en la tabla de PL → fuera de la lista.
+    ids = [r.hero_id for r in picks.recommend(picks.DraftState(my_pos=3, enemies=[12]), data)]
+    assert 3 not in ids and 55 in ids
+    # Tabla del enemigo todavía no bajada: nadie se oculta.
+    data2 = _pick_data()
+    data2.matchups = {}
+    assert 3 in [r.hero_id for r in picks.recommend(picks.DraftState(my_pos=3, enemies=[12]), data2)]
+    # First pick: tabla propia bajada pero sin cobertura → fuera; sin tabla todavía → se muestra.
+    data3 = _pick_data()
+    data3.matchups[55] = {1: (1000, 400)}          # Dark Seer: 1 matchup, cobertura insuficiente
+    first_ids = [r.hero_id for r in picks.recommend(picks.DraftState(my_pos=3), data3)]
+    assert 55 not in first_ids and 2 in first_ids
+    assert 55 not in [r.hero_id for r in picks.meta_first_picks(picks.DraftState(my_pos=3), data3)]
 
 
 def test_meta_winrate_falls_back_to_pub_when_bracket_missing():

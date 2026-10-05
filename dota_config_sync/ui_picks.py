@@ -212,9 +212,10 @@ class HeroPickerPopup(ctk.CTkToplevel):
                  allies: set[int], enemies: set[int], recs: list[int], on_pick):
         super().__init__(master, fg_color=C["bg"])
         self.title(title)
-        self.geometry("860x720")
+        root = master.winfo_toplevel()
+        self.geometry(self._centered_geometry(root, 860, 720))
         self.minsize(640, 480)
-        self.transient(master.winfo_toplevel())
+        self.transient(root)
         self._on_pick = on_pick
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=16, pady=(14, 6))
@@ -240,6 +241,17 @@ class HeroPickerPopup(ctk.CTkToplevel):
         self.search.bind("<Return>", lambda _e: self._pick_first())
         self.bind("<Escape>", lambda _e: self.destroy())
         self.after(120, self._focus)
+
+    @staticmethod
+    def _centered_geometry(root, width: int, height: int) -> str:
+        """Centrado sobre la ventana principal (esté donde esté), sin salirse de la pantalla."""
+        root.update_idletasks()
+        rx, ry, rw, rh = root.winfo_rootx(), root.winfo_rooty(), root.winfo_width(), root.winfo_height()
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        width, height = min(width, sw - 20), min(height, sh - 60)
+        x = max(0, min(rx + (rw - width) // 2, sw - width))
+        y = max(0, min(ry + (rh - height) // 2, sh - height - 40))
+        return f"{width}x{height}+{x}+{y}"
 
     def _focus(self):
         self.lift()
@@ -392,7 +404,6 @@ class PicksTab(ctk.CTkFrame):
         self._loaded_static = False
         self._personal_for: str | None = None
         self._matchups_in_flight: set[int] = set()
-        self._empty_tables: set[int] = set()   # tablas que vinieron vacías: no se reintentan en la sesión
         self._pending_recompute: str | None = None
         self._build()
         threading.Thread(target=self._load_static, daemon=True).start()
@@ -628,19 +639,15 @@ class PicksTab(ctk.CTkFrame):
 
     def _ensure_tables(self, heroes: list[int]):
         """Baja (o lee de caché) la tabla de matchups de cada héroe nuevo; el recompute vuelve a correr al llegar."""
-        missing = [h for h in heroes if h not in self.data.matchups and h not in self._matchups_in_flight
-                   and h not in self._empty_tables]
+        missing = [h for h in heroes if h not in self.data.matchups and h not in self._matchups_in_flight]
         if not missing:
             return
         self._matchups_in_flight.update(missing)
 
         def worker():
             for h in missing:
-                table = picks.fetch_matchups(h, self.ctx.cfg.opendota_stats_ttl_seconds)
-                if table:
-                    self.data.matchups[h] = table
-                else:
-                    self._empty_tables.add(h)
+                # Una tabla vacía se guarda como {}: cuenta como "sin muestra" y no se reintenta en la sesión.
+                self.data.matchups[h] = picks.fetch_matchups(h, self.ctx.cfg.opendota_stats_ttl_seconds)
                 self._matchups_in_flight.discard(h)
                 self.after(0, self._schedule_recompute)
 
@@ -666,7 +673,7 @@ class PicksTab(ctk.CTkFrame):
         needed = list(state.enemies) if state.enemies else [r.hero_id for r in recs]
         needed += [r.hero_id for r in firsts]
         self._ensure_tables(needed)
-        known = sum(1 for h in needed if h in self.data.matchups or h in self._empty_tables)
+        known = sum(1 for h in needed if h in self.data.matchups)
         tables = (f"counters {known}/{len(needed)} tablas" if state.enemies
                   else f"first pick: tablas {known}/{len(needed)}")
         pending = (not self._loaded_static) or known < len(needed)

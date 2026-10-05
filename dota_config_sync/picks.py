@@ -344,6 +344,7 @@ def score_hero(hero: int, state: DraftState, data: PickData,
     exposure: tuple[float, list[int]] | None = None
     if state.enemies:
         parts["counters"] = _clamp(0.5 + delta / COUNTER_FULL_SCALE) if known else 0.5
+        parts["known_enemies"] = float(known)   # informativo: no entra en la suma ponderada
         tone = "g" if delta >= 0.03 else "r" if delta <= -0.03 else ""
         chips.append((f"{delta:+.0%} vs enemigos" if known else "sin dato vs enemigos", tone))
         lane = [e for e in state.enemies if is_lane_opponent(state.my_pos, state.enemy_pos.get(e))]
@@ -419,11 +420,25 @@ def weights_for(state: DraftState) -> dict[str, float]:
     return DEFAULT_WEIGHTS if state.enemies else FIRST_PICK_WEIGHTS
 
 
+def has_enough_sample(r: Recommendation, state: DraftState, data: PickData) -> bool:
+    """
+    Sin muestra no se recomienda. First pick: tabla propia ya bajada pero sin cobertura → fuera
+    (la que todavía no llegó se muestra mientras tanto). Con enemigos y sus tablas ya bajadas:
+    fuera el héroe que no aparece contra ninguno de ellos.
+    """
+    if not state.enemies:
+        return r.hero_id not in data.matchups or counter_exposure(r.hero_id, data) is not None
+    if all(e in data.matchups for e in state.enemies):
+        return r.parts.get("known_enemies", 0) > 0
+    return True
+
+
 def rank_all(state: DraftState, data: PickData, weights: dict[str, float] | None = None) -> list[Recommendation]:
-    """Toda la pool (sin los ya pickeados) puntuada, ordenada y con tier."""
+    """Toda la pool (sin los ya pickeados) puntuada, filtrada por muestra, ordenada y con tier."""
     weights = weights or weights_for(state)
     taken = state.taken()
     recs = [score_hero(h, state, data, weights) for h in data.hero_names if h not in taken]
+    recs = [r for r in recs if has_enough_sample(r, state, data)]
     recs.sort(key=lambda r: r.score, reverse=True)
     return assign_tiers(recs)
 
