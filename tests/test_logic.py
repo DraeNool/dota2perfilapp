@@ -324,6 +324,41 @@ def test_insights_read_the_numbers():
     assert "derrotas duran 7 min más" in text
 
 
+def test_meta_first_picks_only_role_heroes_minus_taken_sorted():
+    from dota_config_sync import picks
+
+    data = _pick_data()                                   # roles: pos 3 -> [2, 55, 93]
+    state = picks.DraftState(my_pos=3, allies=[93], enemies=[12])
+    recs = picks.meta_first_picks(state, data)
+    assert [r.hero_id for r in recs] == [55, 2] or [r.hero_id for r in recs] == [2, 55]
+    assert recs[0].score >= recs[1].score
+    assert all("vs enemigos" not in c for r in recs for c, _ in r.chips)   # ignora el draft enemigo
+    assert picks.meta_first_picks(picks.DraftState(my_pos=None), data) == []
+
+
+def test_first_pick_weights_favor_meta_over_personal_history():
+    from dota_config_sync import picks
+
+    data = _pick_data()
+    # Dos héroes de pos 3 con tablas iguales y sin counters: Axe es meta (53 %) y nunca jugado;
+    # Slark es flojo en el meta (48 %) pero el usuario lo juega mucho y bien.
+    data.hero_stats[93] = {"7_pick": 9000, "7_win": 4300}
+    data.player_heroes[93] = {"hero_id": "93", "games": 60, "win": 39}
+    neutral = dict.fromkeys(range(900, 925), (1000, 500))
+    data.matchups[2] = dict(neutral)
+    data.matchups[93] = dict(neutral)
+    state = picks.DraftState(my_pos=3)
+    assert picks.weights_for(state) is picks.FIRST_PICK_WEIGHTS
+    assert picks.weights_for(picks.DraftState(my_pos=3, enemies=[12])) is picks.DEFAULT_WEIGHTS
+    first = {r.hero_id: r.score for r in picks.meta_first_picks(state, data)}
+    assert first[2] > first[93]                                   # manda el meta
+    with_history = {r.hero_id: r.score for r in picks.recommend(state, data)}
+    assert with_history[2] > with_history[93]
+    # ...pero el historial sigue desempatando: el mismo Slark sin partidas puntúa menos.
+    data.player_heroes.pop(93)
+    assert picks.meta_first_picks(state, data)[-1].score < first[93]
+
+
 def test_meta_winrate_falls_back_to_pub_when_bracket_missing():
     from dota_config_sync.picks import meta_winrate
 
@@ -365,8 +400,8 @@ def test_first_pick_mode_uses_counter_exposure():
     assert axe.parts["counters"] == 0.0                               # 45 % del pool lo countera → nada seguro
     assert any("First pick: 45%" in c for c, _ in axe.chips)
     assert "arriesgado de first" in axe.reason.lower() and "Anti-Mage" in axe.reason
-    unknown = picks.score_hero(93, state, data)             # sin tabla propia: neutro
-    assert unknown.parts["counters"] == 0.5
+    unknown = picks.score_hero(93, state, data)             # sin tabla propia: leve malus, no se premia
+    assert unknown.parts["counters"] == 0.4
     recs = picks.recommend(state, data)
     alerts = picks.draft_alerts(state, data, recs=recs)
     assert any("Axe de first es arriesgado" in t for _, t in alerts)

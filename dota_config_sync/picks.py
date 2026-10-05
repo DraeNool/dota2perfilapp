@@ -17,6 +17,8 @@ MATCHUPS_URL = "https://api.opendota.com/api/heroes/{hero_id}/matchups"
 PLAYER_HEROES_URL = "https://api.opendota.com/api/players/{steam_id3}/heroes"
 
 DEFAULT_WEIGHTS = {"meta": 0.35, "counters": 0.35, "personal": 0.20, "position": 0.10}
+# First pick: manda el meta; "counters" acá es la seguridad ante counters; el historial solo desempata.
+FIRST_PICK_WEIGHTS = {"meta": 0.40, "counters": 0.35, "position": 0.15, "personal": 0.10}
 META_PRIOR_GAMES = 200
 COUNTER_PRIOR_GAMES = 50
 PERSONAL_PRIOR_GAMES = 15
@@ -319,7 +321,8 @@ def score_hero(hero: int, state: DraftState, data: PickData,
             exp_tone = "g" if exposure[0] <= 0.08 else "r" if exposure[0] >= 0.20 else "a"
             chips.append((f"First pick: {exposure[0]:.0%} del pool lo counterea", exp_tone))
         else:
-            parts["counters"] = 0.5
+            # Sin datos no se premia: leve malus, como el historial desconocido.
+            parts["counters"] = 0.4
             if hero in data.matchups:
                 chips.append(("First pick: pocos matchups con muestra", "a"))
 
@@ -372,11 +375,32 @@ def score_hero(hero: int, state: DraftState, data: PickData,
     return Recommendation(hero, data.name(hero), round(score, 1), parts, chips, reason[0].upper() + reason[1:])
 
 
-def recommend(state: DraftState, data: PickData, weights: dict[str, float] = DEFAULT_WEIGHTS,
+def weights_for(state: DraftState) -> dict[str, float]:
+    """Sin enemigos a la vista se recomienda un first pick: pesa el meta, no el historial."""
+    return DEFAULT_WEIGHTS if state.enemies else FIRST_PICK_WEIGHTS
+
+
+def recommend(state: DraftState, data: PickData, weights: dict[str, float] | None = None,
               limit: int = 10) -> list[Recommendation]:
+    weights = weights or weights_for(state)
     taken = state.taken()
     pool = [h for h in data.hero_names if h not in taken]
     recs = [score_hero(h, state, data, weights) for h in pool]
+    recs.sort(key=lambda r: r.score, reverse=True)
+    return recs[:limit]
+
+
+def meta_first_picks(state: DraftState, data: PickData, limit: int = 5) -> list[Recommendation]:
+    """
+    Los héroes del meta de TU posición (ranking D2PT) ordenados como first pick: cuán
+    countereables son, su winrate en tu bracket y tu historial con ellos. Ignora a los
+    enemigos cargados a propósito: es la respuesta a "¿qué firsteo?" antes del draft.
+    """
+    if not state.my_pos:
+        return []
+    pool = [h for h in data.roles.get(f"pos {state.my_pos}", []) if h not in state.taken() and h in data.hero_names]
+    blind = DraftState(my_pos=state.my_pos, allies=state.allies)
+    recs = [score_hero(h, blind, data, FIRST_PICK_WEIGHTS) for h in pool]
     recs.sort(key=lambda r: r.score, reverse=True)
     return recs[:limit]
 
