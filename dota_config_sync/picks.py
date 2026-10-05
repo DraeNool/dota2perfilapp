@@ -173,6 +173,29 @@ class Recommendation:
     parts: dict[str, float]
     chips: list[tuple[str, str]]  # (texto, tono: "", "g", "a", "r")
     reason: str
+    tier: str = ""
+
+
+# Tier por percentil dentro de todos los candidatos (rank/total ≤ p) ...
+TIER_PERCENTILES = (("S+", 0.02), ("S", 0.05), ("A+", 0.10), ("A", 0.20),
+                    ("B+", 0.35), ("B", 0.50), ("C+", 0.70), ("C", 1.01))
+TIER_ORDER = [t for t, _ in TIER_PERCENTILES]
+# ... con techo por puntaje absoluto: un draft donde ni el mejor pick es bueno no muestra un S+ falso.
+TIER_CAPS = ((70, "S+"), (60, "S"), (50, "A+"), (40, "B+"), (0, "C+"))
+
+
+def tier_for(score: float, rank: int, total: int) -> str:
+    p = rank / max(total, 1)
+    tier = next(t for t, limit in TIER_PERCENTILES if p <= limit)
+    cap = next(c for floor, c in TIER_CAPS if score >= floor)
+    return tier if TIER_ORDER.index(tier) >= TIER_ORDER.index(cap) else cap
+
+
+def assign_tiers(recs: list[Recommendation]) -> list[Recommendation]:
+    """Asigna tier a una lista YA ordenada de mejor a peor (toda la pool, no solo el top)."""
+    for i, r in enumerate(recs, 1):
+        r.tier = tier_for(r.score, i, len(recs))
+    return recs
 
 
 def _clamp(x: float) -> float:
@@ -380,14 +403,18 @@ def weights_for(state: DraftState) -> dict[str, float]:
     return DEFAULT_WEIGHTS if state.enemies else FIRST_PICK_WEIGHTS
 
 
-def recommend(state: DraftState, data: PickData, weights: dict[str, float] | None = None,
-              limit: int = 10) -> list[Recommendation]:
+def rank_all(state: DraftState, data: PickData, weights: dict[str, float] | None = None) -> list[Recommendation]:
+    """Toda la pool (sin los ya pickeados) puntuada, ordenada y con tier."""
     weights = weights or weights_for(state)
     taken = state.taken()
-    pool = [h for h in data.hero_names if h not in taken]
-    recs = [score_hero(h, state, data, weights) for h in pool]
+    recs = [score_hero(h, state, data, weights) for h in data.hero_names if h not in taken]
     recs.sort(key=lambda r: r.score, reverse=True)
-    return recs[:limit]
+    return assign_tiers(recs)
+
+
+def recommend(state: DraftState, data: PickData, weights: dict[str, float] | None = None,
+              limit: int = 10) -> list[Recommendation]:
+    return rank_all(state, data, weights)[:limit]
 
 
 def meta_first_picks(state: DraftState, data: PickData, limit: int = 5) -> list[Recommendation]:
@@ -398,11 +425,11 @@ def meta_first_picks(state: DraftState, data: PickData, limit: int = 5) -> list[
     """
     if not state.my_pos:
         return []
-    pool = [h for h in data.roles.get(f"pos {state.my_pos}", []) if h not in state.taken() and h in data.hero_names]
+    pool = set(data.roles.get(f"pos {state.my_pos}", [])) - state.taken()
     blind = DraftState(my_pos=state.my_pos, allies=state.allies)
-    recs = [score_hero(h, blind, data, FIRST_PICK_WEIGHTS) for h in pool]
-    recs.sort(key=lambda r: r.score, reverse=True)
-    return recs[:limit]
+    # El tier sale del ranking de TODA la pool a ciegas, no del puñado de héroes de la posición.
+    ranked = rank_all(blind, data, FIRST_PICK_WEIGHTS)
+    return [r for r in ranked if r.hero_id in pool][:limit]
 
 
 def strong_heroes(data: PickData, limit: int = 8) -> list[int]:

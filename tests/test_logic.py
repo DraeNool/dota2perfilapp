@@ -359,6 +359,34 @@ def test_first_pick_weights_favor_meta_over_personal_history():
     assert picks.meta_first_picks(state, data)[-1].score < first[93]
 
 
+def test_tier_for_percentile_with_absolute_cap():
+    from dota_config_sync.picks import tier_for
+
+    assert tier_for(80, 1, 127) == "S+"
+    assert tier_for(80, 6, 127) == "S"          # 4.7 %
+    assert tier_for(80, 12, 127) == "A+"        # 9.4 %
+    assert tier_for(80, 25, 127) == "A"
+    assert tier_for(80, 63, 127) == "B"         # 49.6 %
+    assert tier_for(80, 127, 127) == "C"
+    assert tier_for(58, 1, 127) == "A+"         # el mejor del draft, pero con 58 no es S
+    assert tier_for(44, 1, 127) == "B+"
+    assert tier_for(30, 1, 127) == "C+"
+    assert tier_for(65, 1, 127) == "S"
+
+
+def test_recommend_and_first_picks_carry_tiers():
+    from dota_config_sync import picks
+
+    data = _pick_data()
+    recs = picks.recommend(picks.DraftState(my_pos=3, enemies=[12]), data)
+    assert all(r.tier for r in recs)
+    assert recs[0].tier == picks.tier_for(recs[0].score, 1, len(data.hero_names) - 1)
+    order = picks.TIER_ORDER
+    assert all(order.index(a.tier) <= order.index(b.tier) for a, b in zip(recs, recs[1:], strict=False))
+    firsts = picks.meta_first_picks(picks.DraftState(my_pos=3), data)
+    assert firsts and all(f.tier for f in firsts)
+
+
 def test_meta_winrate_falls_back_to_pub_when_bracket_missing():
     from dota_config_sync.picks import meta_winrate
 

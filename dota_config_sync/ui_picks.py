@@ -29,6 +29,23 @@ COMBO_STYLE = {
     "dropdown_hover_color": C["card"], "dropdown_text_color": C["txt"],
 }
 ENEMY_RED = "#6b2a3b"
+TIER_COLORS = {  # (fondo, texto) por tier
+    "S+": ("#5a4300", "#ffd84d"), "S": ("#4a3800", "#f0c030"),
+    "A+": ("#0f3d2e", "#34d399"), "A": ("#0f3328", "#2fbf8a"),
+    "B+": ("#2a1a4a", "#c4b5fd"), "B": ("#241741", "#a78bfa"),
+    "C+": ("#201a2e", "#a99fc9"), "C": ("#1a1526", "#6b6090"),
+}
+
+
+def _tier_badge(parent) -> ctk.CTkLabel:
+    return ctk.CTkLabel(parent, text="", font=ctk.CTkFont(size=14, weight="bold"), corner_radius=6,
+                        width=40, height=26, padx=6)
+
+
+def _set_tier(badge: ctk.CTkLabel, score_lbl: ctk.CTkLabel, r: picks.Recommendation):
+    bg, fg = TIER_COLORS.get(r.tier, TIER_COLORS["C"])
+    badge.configure(text=r.tier or "—", fg_color=bg, text_color=fg)
+    score_lbl.configure(text=f"{r.score:.0f}")
 
 
 def _text(parent, text: str, size: int = 12, color: str = C["txt2"], bold: bool = False, **kw) -> ctk.CTkLabel:
@@ -301,14 +318,17 @@ class RecRow(ctk.CTkFrame):
         self.pic.grid(row=0, column=1, rowspan=3, padx=(0, 8), sticky="n")
         self.name = _text(self, "", 13, C["txt"], bold=True)
         self.name.grid(row=0, column=2, sticky="w")
-        self.score = _text(self, "", 17, C["accent"], bold=True)
-        self.score.grid(row=0, column=3, rowspan=2, sticky="e")
+        self.tier = _tier_badge(self)
+        self.tier.grid(row=0, column=3, sticky="e")
+        self.score = _text(self, "", 10, C["txt3"], anchor="e")
+        self.score.grid(row=1, column=3, sticky="e")
         self.reason = _text(self, "", 11, C["txt2"], wraplength=330, justify="left")
         self.reason.grid(row=1, column=2, sticky="w")
         self.chips = ctk.CTkFrame(self, fg_color="transparent")
         self.chips.grid(row=2, column=2, columnspan=2, sticky="w", pady=(2, 0))
         self.chip_labels = [_chip(self.chips) for _ in range(MAX_CHIPS)]
-        for wdg in (self, self.rank, self.pic, self.name, self.score, self.reason, self.chips, *self.chip_labels):
+        for wdg in (self, self.rank, self.pic, self.name, self.tier, self.score, self.reason, self.chips,
+                    *self.chip_labels):
             wdg.bind("<Button-1>", lambda _e: on_click(self.hero_id))
 
     def update_rec(self, rank: int, r: picks.Recommendation, image: ctk.CTkImage | None):
@@ -316,7 +336,7 @@ class RecRow(ctk.CTkFrame):
         self.rank.configure(text=str(rank))
         self.pic.configure(image=image or hero_images.blank_image(TILE), text="" if image else r.name[:2].upper())
         self.name.configure(text=r.name)
-        self.score.configure(text=f"{r.score:.0f}")
+        _set_tier(self.tier, self.score, r)
         self.reason.configure(text=r.reason)
         _set_chips(self.chip_labels, r.chips)
 
@@ -331,19 +351,23 @@ class FirstPickTile(ctk.CTkFrame):
         self.pic.pack(pady=(10, 4))
         self.name = _text(self, "", 12, C["txt"], bold=True, anchor="center")
         self.name.pack(fill="x", padx=8)
-        self.score = _text(self, "", 16, C["accent"], bold=True, anchor="center")
-        self.score.pack(fill="x")
+        badge_row = ctk.CTkFrame(self, fg_color="transparent")
+        badge_row.pack(pady=(2, 0))
+        self.tier = _tier_badge(badge_row)
+        self.tier.pack(side="left")
+        self.score = _text(badge_row, "", 10, C["txt3"])
+        self.score.pack(side="left", padx=(6, 0))
         self.chips = ctk.CTkFrame(self, fg_color="transparent")
-        self.chips.pack(pady=(2, 10))
+        self.chips.pack(pady=(4, 10))
         self.chip_labels = [_chip(self.chips) for _ in range(2)]
-        for wdg in (self, self.pic, self.name, self.score, self.chips, *self.chip_labels):
+        for wdg in (self, self.pic, self.name, badge_row, self.tier, self.score, self.chips, *self.chip_labels):
             wdg.bind("<Button-1>", lambda _e: on_click(self.hero_id))
 
     def update_rec(self, r: picks.Recommendation, image: ctk.CTkImage | None):
         self.hero_id = r.hero_id
         self.pic.configure(image=image or hero_images.blank_image(TILE), text="" if image else r.name[:2].upper())
         self.name.configure(text=r.name)
-        self.score.configure(text=f"{r.score:.0f}")
+        _set_tier(self.tier, self.score, r)
         compact = []
         for text, tone in r.chips:
             if text.startswith("First pick: pocos"):
@@ -352,7 +376,7 @@ class FirstPickTile(ctk.CTkFrame):
                 compact.append((text.split(":")[1].split("del")[0].strip() + " countereable", tone))
             elif text.startswith(("D2PT", "Vos")):
                 compact.append((text, tone))
-        _set_chips(self.chip_labels, compact[:2] or r.chips[:2])
+        _set_chips(self.chip_labels, compact[:1] or r.chips[:1])   # la tarjeta es angosta: un chip
 
 
 class PicksTab(ctk.CTkFrame):
