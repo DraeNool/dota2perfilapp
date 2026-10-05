@@ -373,6 +373,19 @@ def test_normalize_weights_merges_and_sums_to_one():
     assert picks.DEFAULT_WEIGHTS["personal"] == 0.10                   # el historial solo desempata
 
 
+def test_my_heroes_in_draft_are_strong_heroes_scored_against_draft():
+    from dota_config_sync import picks
+
+    data = _pick_data()                                   # historial: Dark Seer 31 pj, Slark 14 pj, PL 2 pj
+    state = picks.DraftState(my_pos=3, enemies=[12])
+    mine = picks.my_heroes_in_draft(state, data)
+    ids = [r.hero_id for r in mine]
+    assert ids == [55, 93]                                # PL tiene 2 pj (<5) y además es enemigo
+    assert mine[0].score >= mine[1].score and all(r.tier for r in mine)
+    assert any("vs enemigos" in c for c, _ in mine[0].chips)
+    assert picks.my_heroes_in_draft(state, picks.PickData(hero_names=data.hero_names)) == []
+
+
 def test_tier_for_percentile_with_absolute_cap():
     from dota_config_sync.picks import tier_for
 

@@ -48,6 +48,20 @@ def _set_tier(badge: ctk.CTkLabel, score_lbl: ctk.CTkLabel, r: picks.Recommendat
     score_lbl.configure(text=f"{r.score:.0f}")
 
 
+def virtual_screen_bounds(root) -> tuple[int, int, int, int]:
+    """(x, y, ancho, alto) del escritorio virtual: todos los monitores. Fallback: el principal."""
+    try:
+        import ctypes
+
+        m = ctypes.windll.user32.GetSystemMetrics
+        x, y, w, h = m(76), m(77), m(78), m(79)   # SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CX/CYVIRTUALSCREEN
+        if w > 0 and h > 0:
+            return x, y, w, h
+    except (AttributeError, OSError):
+        pass
+    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
+
+
 def _text(parent, text: str, size: int = 12, color: str = C["txt2"], bold: bool = False, **kw) -> ctk.CTkLabel:
     font = ctk.CTkFont(size=size, weight="bold" if bold else "normal")
     kw.setdefault("anchor", "w")
@@ -244,13 +258,18 @@ class HeroPickerPopup(ctk.CTkToplevel):
 
     @staticmethod
     def _centered_geometry(root, width: int, height: int) -> str:
-        """Centrado sobre la ventana principal (esté donde esté), sin salirse de la pantalla."""
+        """
+        Centrado sobre la ventana principal, esté en el monitor que esté.
+
+        winfo_screenwidth() es solo el monitor principal: acotar con eso arrastra el popup
+        a la pantalla 1. Se acota al escritorio virtual (todos los monitores) vía Win32.
+        """
         root.update_idletasks()
         rx, ry, rw, rh = root.winfo_rootx(), root.winfo_rooty(), root.winfo_width(), root.winfo_height()
-        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-        width, height = min(width, sw - 20), min(height, sh - 60)
-        x = max(0, min(rx + (rw - width) // 2, sw - width))
-        y = max(0, min(ry + (rh - height) // 2, sh - height - 40))
+        vx, vy, vw, vh = virtual_screen_bounds(root)
+        width, height = min(width, vw - 20), min(height, vh - 60)
+        x = max(vx, min(rx + (rw - width) // 2, vx + vw - width))
+        y = max(vy, min(ry + (rh - height) // 2, vy + vh - height - 40))
         return f"{width}x{height}+{x}+{y}"
 
     def _focus(self):
@@ -375,19 +394,23 @@ class FirstPickTile(ctk.CTkFrame):
         for wdg in (self, self.pic, self.name, badge_row, self.tier, self.score, self.chips, *self.chip_labels):
             wdg.bind("<Button-1>", lambda _e: on_click(self.hero_id))
 
-    def update_rec(self, r: picks.Recommendation, image: ctk.CTkImage | None):
+    def update_rec(self, r: picks.Recommendation, image: ctk.CTkImage | None,
+                   prefer: tuple[str, ...] = ("First pick", "D2PT", "Vos")):
         self.hero_id = r.hero_id
         self.pic.configure(image=image or hero_images.blank_image(TILE), text="" if image else r.name[:2].upper())
         self.name.configure(text=r.name)
         _set_tier(self.tier, self.score, r)
         compact = []
-        for text, tone in r.chips:
-            if text.startswith("First pick: pocos"):
-                compact.append(("sin muestra", tone))
-            elif text.startswith("First pick:"):
-                compact.append((text.split(":")[1].split("del")[0].strip() + " countereable", tone))
-            elif text.startswith(("D2PT", "Vos")):
-                compact.append((text, tone))
+        for key in prefer:                                   # en el orden de preferencia pedido
+            for text, tone in r.chips:
+                if key not in text:
+                    continue
+                if text.startswith("First pick: pocos"):
+                    compact.append(("sin muestra", tone))
+                elif text.startswith("First pick:"):
+                    compact.append((text.split(":")[1].split("del")[0].strip() + " countereable", tone))
+                else:
+                    compact.append((text, tone))
         _set_chips(self.chip_labels, compact[:1] or r.chips[:1])   # la tarjeta es angosta: un chip
 
 
@@ -462,6 +485,22 @@ class PicksTab(ctk.CTkFrame):
             tile.grid(row=0, column=i, sticky="nsew", padx=(0, 8) if i < MAX_FIRST - 1 else 0)
             self.first_tiles.append(tile)
         self.first_empty = _text(fin, "Elegí tu posición para ver los first picks del meta.", 11, C["txt3"])
+
+        mbox, min_ = card(self.scroll, C["accent"])
+        mbox.pack(fill="x", pady=(12, 0))
+        self.mine_title = _text(min_, "TUS HÉROES EN ESTE DRAFT", 10, C["accent"], bold=True)
+        self.mine_title.pack(fill="x")
+        _text(min_, "Tus habituales puntuados contra lo que sacaron: tier en este draft y % vs enemigos. "
+                    "Click para agregarlo.", 11, C["txt2"]).pack(fill="x")
+        mstrip = ctk.CTkFrame(min_, fg_color="transparent")
+        mstrip.pack(fill="x", pady=(8, 0))
+        mstrip.columnconfigure(tuple(range(MAX_FIRST)), weight=1, uniform="mine")
+        self.mine_tiles = []
+        for i in range(MAX_FIRST):
+            tile = FirstPickTile(mstrip, on_click=lambda h: self._add(h, SIDES[0]))
+            tile.grid(row=0, column=i, sticky="nsew", padx=(0, 8) if i < MAX_FIRST - 1 else 0)
+            self.mine_tiles.append(tile)
+        self.mine_empty = _text(min_, "Cargando tu historial de héroes...", 11, C["txt3"])
 
         results = ctk.CTkFrame(self.scroll, fg_color="transparent")
         results.pack(fill="x", pady=(12, 16))
@@ -696,6 +735,24 @@ class PicksTab(ctk.CTkFrame):
             self.first_empty.pack_forget()
         else:
             self.first_empty.pack(fill="x", pady=(6, 0))
+
+        mine = picks.my_heroes_in_draft(state, self.data, limit=MAX_FIRST,
+                                        weights=w_enemy if state.enemies else w_first)
+        prefer = ("vs enemigos", "Vos", "D2PT") if state.enemies else ("First pick", "Vos", "D2PT")
+        for i, tile in enumerate(self.mine_tiles):
+            if i < len(mine):
+                r = mine[i]
+                tile.update_rec(r, hero_images.portrait_image(self.catalog.get(r.hero_id, {}).get("npc", ""), TILE),
+                                prefer=prefer)
+                tile.grid()
+            else:
+                tile.grid_remove()
+        if mine:
+            self.mine_empty.pack_forget()
+        else:
+            self.mine_empty.configure(text="Sin historial de héroes con muestra para esta cuenta."
+                                      if self.data.player_heroes else "Cargando tu historial de héroes...")
+            self.mine_empty.pack(fill="x", pady=(6, 0))
 
         if state.enemies:
             self.rec_title.configure(text=f"RECOMENDADOS PARA {pos_txt} · {len(state.enemies)} enemigo(s)")

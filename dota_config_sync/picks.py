@@ -464,6 +464,18 @@ def meta_first_picks(state: DraftState, data: PickData, limit: int = 5,
     return [r for r in ranked if r.hero_id in pool][:limit]
 
 
+def my_heroes_in_draft(state: DraftState, data: PickData, limit: int = 5,
+                       weights: dict[str, float] | None = None) -> list[Recommendation]:
+    """
+    Tus habituales (mejor score bayesiano, ≥5 partidas) puntuados contra el draft actual, con el
+    tier que les toca en el ranking completo. Los que no tienen muestra contra el draft no salen.
+    """
+    by_id = {r.hero_id: r for r in rank_all(state, data, weights)}
+    mine = [by_id[h] for h in strong_heroes(data, limit=12) if h in by_id]
+    mine.sort(key=lambda r: r.score, reverse=True)
+    return mine[:limit]
+
+
 def strong_heroes(data: PickData, limit: int = 8) -> list[int]:
     """Tus héroes con mejor score bayesiano (≥5 partidas), de mejor a peor."""
     rows = sorted(
