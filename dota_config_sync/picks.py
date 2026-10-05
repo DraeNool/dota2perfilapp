@@ -16,9 +16,25 @@ HERO_STATS_URL = "https://api.opendota.com/api/heroStats"
 MATCHUPS_URL = "https://api.opendota.com/api/heroes/{hero_id}/matchups"
 PLAYER_HEROES_URL = "https://api.opendota.com/api/players/{steam_id3}/heroes"
 
-DEFAULT_WEIGHTS = {"meta": 0.35, "counters": 0.35, "personal": 0.20, "position": 0.10}
-# First pick: manda el meta; "counters" acá es la seguridad ante counters; el historial solo desempata.
+# Con enemigos a la vista deciden los counters y el meta de la posición; el historial solo desempata:
+# un héroe "tuyo" no debe colarse arriba cuando el draft pide otra cosa.
+DEFAULT_WEIGHTS = {"meta": 0.30, "counters": 0.45, "position": 0.15, "personal": 0.10}
+COUNTER_FULL_SCALE = 0.12   # ±6 % de delta medio contra los enemigos ya es counter (o countereado) a fondo
+# First pick: manda el meta; "counters" acá es la seguridad ante counters.
 FIRST_PICK_WEIGHTS = {"meta": 0.40, "counters": 0.35, "position": 0.15, "personal": 0.10}
+
+
+def normalize_weights(raw: dict | None, base: dict[str, float]) -> dict[str, float]:
+    """Mezcla pesos del usuario sobre `base` y los normaliza a suma 1; ignora claves o valores inválidos."""
+    out = dict(base)
+    for key, value in (raw or {}).items():
+        if key in out:
+            try:
+                out[key] = max(0.0, float(value))
+            except (TypeError, ValueError):
+                continue
+    total = sum(out.values()) or 1.0
+    return {k: v / total for k, v in out.items()}
 META_PRIOR_GAMES = 200
 COUNTER_PRIOR_GAMES = 50
 PERSONAL_PRIOR_GAMES = 15
@@ -327,7 +343,7 @@ def score_hero(hero: int, state: DraftState, data: PickData,
     delta, best_target, known = _counter_delta(hero, state, data)
     exposure: tuple[float, list[int]] | None = None
     if state.enemies:
-        parts["counters"] = _clamp(0.5 + delta / 0.16) if known else 0.5
+        parts["counters"] = _clamp(0.5 + delta / COUNTER_FULL_SCALE) if known else 0.5
         tone = "g" if delta >= 0.03 else "r" if delta <= -0.03 else ""
         chips.append((f"{delta:+.0%} vs enemigos" if known else "sin dato vs enemigos", tone))
         lane = [e for e in state.enemies if is_lane_opponent(state.my_pos, state.enemy_pos.get(e))]
@@ -417,7 +433,8 @@ def recommend(state: DraftState, data: PickData, weights: dict[str, float] | Non
     return rank_all(state, data, weights)[:limit]
 
 
-def meta_first_picks(state: DraftState, data: PickData, limit: int = 5) -> list[Recommendation]:
+def meta_first_picks(state: DraftState, data: PickData, limit: int = 5,
+                     weights: dict[str, float] | None = None) -> list[Recommendation]:
     """
     Los héroes del meta de TU posición (ranking D2PT) ordenados como first pick: cuán
     countereables son, su winrate en tu bracket y tu historial con ellos. Ignora a los
@@ -428,7 +445,7 @@ def meta_first_picks(state: DraftState, data: PickData, limit: int = 5) -> list[
     pool = set(data.roles.get(f"pos {state.my_pos}", [])) - state.taken()
     blind = DraftState(my_pos=state.my_pos, allies=state.allies)
     # El tier sale del ranking de TODA la pool a ciegas, no del puñado de héroes de la posición.
-    ranked = rank_all(blind, data, FIRST_PICK_WEIGHTS)
+    ranked = rank_all(blind, data, weights or FIRST_PICK_WEIGHTS)
     return [r for r in ranked if r.hero_id in pool][:limit]
 
 

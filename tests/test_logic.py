@@ -359,6 +359,20 @@ def test_first_pick_weights_favor_meta_over_personal_history():
     assert picks.meta_first_picks(state, data)[-1].score < first[93]
 
 
+def test_normalize_weights_merges_and_sums_to_one():
+    from dota_config_sync import picks
+
+    w = picks.normalize_weights({"personal": 0, "counters": "0.8", "bogus": 9, "meta": "x"}, picks.DEFAULT_WEIGHTS)
+    assert set(w) == set(picks.DEFAULT_WEIGHTS)
+    assert w["personal"] == 0 and abs(sum(w.values()) - 1) < 1e-9
+    assert w["counters"] > w["meta"] > w["position"]
+    assert picks.normalize_weights(None, picks.FIRST_PICK_WEIGHTS) == picks.FIRST_PICK_WEIGHTS
+    cfg = AppConfig({"picks_weights": {"personal": 0.3}})
+    assert cfg.picks_weights == {"personal": 0.3}
+    assert AppConfig({"picks_weights": "nope"}).picks_weights == {}
+    assert picks.DEFAULT_WEIGHTS["personal"] == 0.10                   # el historial solo desempata
+
+
 def test_tier_for_percentile_with_absolute_cap():
     from dota_config_sync.picks import tier_for
 

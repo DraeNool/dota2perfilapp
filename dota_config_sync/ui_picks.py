@@ -477,11 +477,13 @@ class PicksTab(ctk.CTkFrame):
             self.alert_rows.append((row, lbl))
         self.alert_empty = _text(alert_list, "Cargá picks enemigos para ver avisos.", 11, C["txt3"])
         self.alert_empty.pack(fill="x")
-        w, f = picks.DEFAULT_WEIGHTS, picks.FIRST_PICK_WEIGHTS
-        weights = (f"Con enemigos: meta {w['meta']:.0%} · counters {w['counters']:.0%} · "
-                   f"tus héroes {w['personal']:.0%} · posición {w['position']:.0%}.\n"
+        w = picks.normalize_weights(self.ctx.cfg.picks_weights, picks.DEFAULT_WEIGHTS)
+        f = picks.normalize_weights(self.ctx.cfg.first_pick_weights, picks.FIRST_PICK_WEIGHTS)
+        weights = (f"Con enemigos: counters {w['counters']:.0%} · meta {w['meta']:.0%} · "
+                   f"posición {w['position']:.0%} · tus héroes {w['personal']:.0%}.\n"
                    f"First pick: meta {f['meta']:.0%} · seguridad {f['counters']:.0%} · "
-                   f"posición {f['position']:.0%} · tus héroes {f['personal']:.0%}.")
+                   f"posición {f['position']:.0%} · tus héroes {f['personal']:.0%}.\n"
+                   "Editables en config.json (picks_weights / first_pick_weights).")
         _text(ain, weights, 10, C["txt3"], wraplength=300, justify="left").pack(fill="x", pady=(10, 0))
 
     def _team_column(self, parent, col: int, side: str, color: str, border: str):
@@ -655,8 +657,10 @@ class PicksTab(ctk.CTkFrame):
         if not self.data.hero_names:
             return
         state = self._state()
-        recs = picks.recommend(state, self.data, limit=MAX_RECS)
-        firsts = picks.meta_first_picks(state, self.data, limit=MAX_FIRST)
+        w_enemy = picks.normalize_weights(self.ctx.cfg.picks_weights, picks.DEFAULT_WEIGHTS)
+        w_first = picks.normalize_weights(self.ctx.cfg.first_pick_weights, picks.FIRST_PICK_WEIGHTS)
+        recs = picks.recommend(state, self.data, weights=w_enemy if state.enemies else w_first, limit=MAX_RECS)
+        firsts = picks.meta_first_picks(state, self.data, limit=MAX_FIRST, weights=w_first)
         self._last_recs = [r.hero_id for r in recs]
 
         needed = list(state.enemies) if state.enemies else [r.hero_id for r in recs]

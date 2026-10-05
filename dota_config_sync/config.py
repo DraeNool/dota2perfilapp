@@ -50,6 +50,9 @@ DEFAULTS = {
     "meta_grids_ttl_seconds": 3600,    # grids Meta de Dota2ProTracker (cambian con el parche)
     "opendota_stats_ttl_seconds": 86400,  # heroStats y matchups (pesados, cambian poco)
     "ranked_matches_limit": 200,       # partidas ranked que lee la pestaña Rendimiento
+    # Pesos del asistente de picks (se normalizan a suma 1). Con enemigos / sin enemigos (first pick).
+    "picks_weights": {"meta": 0.30, "counters": 0.45, "position": 0.15, "personal": 0.10},
+    "first_pick_weights": {"meta": 0.40, "counters": 0.35, "position": 0.15, "personal": 0.10},
     "meta_meta": DEFAULT_META_META,
 }
 
@@ -129,6 +132,16 @@ class AppConfig:
     @property
     def ranked_matches_limit(self) -> int:
         return int(self._data.get("ranked_matches_limit", 200))
+
+    @property
+    def picks_weights(self) -> dict:
+        raw = self._data.get("picks_weights")
+        return dict(raw) if isinstance(raw, dict) else {}
+
+    @property
+    def first_pick_weights(self) -> dict:
+        raw = self._data.get("first_pick_weights")
+        return dict(raw) if isinstance(raw, dict) else {}
 
     @property
     def meta_meta(self) -> dict:
