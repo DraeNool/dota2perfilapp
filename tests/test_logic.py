@@ -338,9 +338,38 @@ def test_draft_alerts_warn_on_weak_matchup_and_history():
     state = picks.DraftState(my_pos=3, allies=[55, 3], enemies=[12])
     alerts = picks.draft_alerts(state, _pick_data())
     texts = [t for _, t in alerts]
-    assert any("Slark pierde 55%" in t for t in texts)
-    assert any("Históricamente perdés 67%" in t for t in texts)
+    assert any("castiga a tu Slark: pierde 55%" in t for t in texts)
+    assert any("Vos perdés 67% cuando enfrentás a Phantom Lancer" in t for t in texts)
+    assert any("countera a tu aliado Dark Seer" in t for t in texts) is False   # Dark Seer le gana 55 % a PL
     assert any("Dark Seer + Bane" in t for t in texts)
+
+
+def test_first_pick_mode_uses_counter_exposure():
+    from dota_config_sync import picks
+
+    data = _pick_data()
+    # Tabla propia de Axe: Anti-Mage le gana 60 % (9000 picks en el bracket), Bane 48 %, Dark Seer 50 %,
+    # más 17 héroes de relleno al 50 % (peso 1) para superar la cobertura mínima.
+    data.matchups[2] = {1: (1000, 400), 3: (1000, 520), 55: (1000, 500)}
+    data.matchups[2].update({900 + i: (1000, 500) for i in range(17)})
+    data.hero_stats[1]["7_pick"] = 9000
+    data.hero_stats[3]["7_pick"] = 3000
+    data.hero_stats[55]["7_pick"] = 8000
+    exposure, worst = picks.counter_exposure(2, data)
+    assert worst == [1]
+    assert abs(exposure - 9000 / (9000 + 3000 + 8000 + 17)) < 1e-9   # ponderado por picks del bracket
+    thin = picks.PickData(matchups={5: {1: (1000, 400), 3: (1000, 400)}}, hero_names={5: "x"})
+    assert picks.counter_exposure(5, thin) is None                   # pocos matchups: no se opina
+    state = picks.DraftState(my_pos=3)                                # sin enemigos: first pick
+    axe = picks.score_hero(2, state, data)
+    assert axe.parts["counters"] == 0.0                               # 45 % del pool lo countera → nada seguro
+    assert any("First pick: 45%" in c for c, _ in axe.chips)
+    assert "arriesgado de first" in axe.reason.lower() and "Anti-Mage" in axe.reason
+    unknown = picks.score_hero(93, state, data)             # sin tabla propia: neutro
+    assert unknown.parts["counters"] == 0.5
+    recs = picks.recommend(state, data)
+    alerts = picks.draft_alerts(state, data, recs=recs)
+    assert any("Axe de first es arriesgado" in t for _, t in alerts)
 
 
 def test_parse_d2pt_relations_groups_rows_by_y_position():

@@ -632,18 +632,29 @@ class PicksTab(ctk.CTkFrame):
         state = self._state()
         self._ensure_enemy_matchups(state.enemies)
 
-        known = sum(1 for e in state.enemies if e in self.data.matchups)
-        counters = f"counters {known}/{len(state.enemies)} enemigos" if state.enemies else "counters al pickear"
-        pending = not self._loaded_static or known < len(state.enemies)
+        recs = picks.recommend(state, self.data, limit=MAX_RECS)
+        if state.enemies:
+            known = sum(1 for e in state.enemies if e in self.data.matchups)
+            counters = f"counters {known}/{len(state.enemies)} enemigos"
+            pending_tables = known < len(state.enemies)
+        else:
+            # First pick: hacen falta las tablas propias de los candidatos para medir cuán countereables son.
+            candidates = [r.hero_id for r in recs]
+            self._ensure_enemy_matchups(candidates)
+            known = sum(1 for h in candidates if h in self.data.matchups)
+            counters = f"first pick: tablas {known}/{len(candidates)}"
+            pending_tables = known < len(candidates)
         bracket = picks.BRACKET_NAMES.get(self.data.bracket or 0, "?")
         meta_txt = f"Parche {self._patch or '?'}" if self._loaded_static else "Cargando meta..."
         self.data_status.configure(text=f"{meta_txt} · {counters} · bracket {bracket}",
-                                   text_color=C["amber"] if pending else C["txt3"])
+                                   text_color=C["amber"] if (pending_tables or not self._loaded_static) else C["txt3"])
 
-        recs = picks.recommend(state, self.data, limit=MAX_RECS)
         self.grid.set_states(set(state.allies), set(state.enemies), [r.hero_id for r in recs])
-        title = f"RECOMENDADOS PARA {POS_LABELS[state.my_pos - 1].upper()}" if state.my_pos else "RECOMENDADOS"
-        self.rec_title.configure(text=f"{title} · {len(state.enemies)} enemigo(s)")
+        pos_txt = f" PARA {POS_LABELS[state.my_pos - 1].upper()}" if state.my_pos else ""
+        if state.enemies:
+            self.rec_title.configure(text=f"RECOMENDADOS{pos_txt} · {len(state.enemies)} enemigo(s)")
+        else:
+            self.rec_title.configure(text=f"FIRST PICK{pos_txt} · sin enemigos a la vista")
         for i, row in enumerate(self.rec_rows):
             if i < len(recs):
                 r = recs[i]
@@ -653,7 +664,7 @@ class PicksTab(ctk.CTkFrame):
             else:
                 row.pack_forget()
 
-        alerts = picks.draft_alerts(state, self.data, limit=MAX_ALERTS)
+        alerts = picks.draft_alerts(state, self.data, limit=MAX_ALERTS, recs=recs)
         if alerts:
             self.alert_empty.pack_forget()
         else:
