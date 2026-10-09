@@ -7,7 +7,7 @@ from datetime import datetime
 
 import customtkinter as ctk
 
-from . import opendota, performance
+from . import opendota, performance, stratz
 from .theme import C, medal_for_tier
 from .widgets import TabContext, card, section_label
 
@@ -146,8 +146,25 @@ class PerformanceTab(ctk.CTkFrame):
     def _load(self, acc: dict, force: bool):
         cfg = self.ctx.cfg
         ttl = 0 if force else cfg.cache_ttl_seconds
-        matches, msg = performance.fetch_ranked_matches(acc["steam_id3"], cfg.ranked_matches_limit, ttl)
         rank_tier = acc.get("rank_tier")
+        matches: list[dict] = []
+        msg = ""
+        if cfg.stratz_api_token:
+            # Stratz: posición jugada por partida, GPM/XPM/IMP. Si falla, OpenDota.
+            matches, tier, msg = stratz.fetch_player_matches(acc["steam_id3"], cfg.ranked_matches_limit,
+                                                             cfg.stratz_api_token, ttl)
+            rank_tier = rank_tier or tier
+            if matches:
+                # Stratz no trae rango promedio del lobby ni tamaño de party: se completan desde OpenDota.
+                od, _ = performance.fetch_ranked_matches(acc["steam_id3"], cfg.ranked_matches_limit, ttl)
+                extra = {m.get("match_id"): m for m in od}
+                for m in matches:
+                    src = extra.get(m["match_id"])
+                    if src:
+                        m["average_rank"] = m["average_rank"] or src.get("average_rank")
+                        m["party_size"] = src.get("party_size")
+        if not matches:
+            matches, msg = performance.fetch_ranked_matches(acc["steam_id3"], cfg.ranked_matches_limit, ttl)
         if not rank_tier:
             rank_tier = opendota.fetch_profile(acc["steam_id3"], cfg.cache_ttl_seconds).get("rank_tier")
         history = performance.record_snapshot(acc["steam_id3"], rank_tier)
@@ -217,20 +234,30 @@ class PerformanceTab(ctk.CTkFrame):
         _text(self.side, "POR HORARIO", 10, C["txt3"], bold=True).pack(fill="x", pady=(10, 0))
         for name, (_pw, pg, pr) in summary["periods"].items():
             self._kv(f"{name.capitalize()} ({pg} pj)", _pct(pr), _rate_color(pr))
+        positions = {p: v for p, v in (summary.get("positions") or {}).items() if v[1]}
+        if positions:
+            _text(self.side, "POR POSICIÓN (Stratz)", 10, C["txt3"], bold=True).pack(fill="x", pady=(10, 0))
+            for pos, (_w, g, r) in sorted(positions.items(), key=lambda kv: -kv[1][1]):
+                self._kv(f"Pos {pos} ({g} pj)", _pct(r), _rate_color(r))
 
         for wdg in self.hero_table.winfo_children():
             wdg.destroy()
         hero_map = self.ctx.hero_map()
-        heads = ("HÉROE", "PARTIDAS", "WINRATE", "KDA", "TENDENCIA")
+        with_gpm = any(h.get("gpm") for h in summary["heroes"])
+        heads = ("HÉROE", "PARTIDAS", "WINRATE", "KDA") + (("GPM", "XPM") if with_gpm else ()) + ("TENDENCIA",)
         for c, h in enumerate(heads):
             _text(self.hero_table, h, 10, C["txt3"], bold=True).grid(row=0, column=c, sticky="w", padx=(0, 18))
         self.hero_table.columnconfigure(0, weight=1)
         for r, h in enumerate(summary["heroes"][:MAX_HERO_ROWS], 1):
-            cells = (
+            cells = [
                 (hero_map.get(h["hero_id"], f"#{h['hero_id']}"), C["txt"]), (str(h["games"]), C["txt2"]),
                 (_pct(h["wr"]), _rate_color(h["wr"])), (f"{h['kda']:.1f}", C["txt2"]),
-                (h["trend"], C["green"] if h["trend"] == "↑" else C["red"] if h["trend"] == "↓" else C["txt2"]),
-            )
+            ]
+            if with_gpm:
+                cells += [(f"{h['gpm']:.0f}" if h.get("gpm") else "—", C["txt2"]),
+                          (f"{h['xpm']:.0f}" if h.get("xpm") else "—", C["txt2"])]
+            trend_color = C["green"] if h["trend"] == "↑" else C["red"] if h["trend"] == "↓" else C["txt2"]
+            cells.append((h["trend"], trend_color))
             for c, (txt, col) in enumerate(cells):
                 _text(self.hero_table, txt, 12, col).grid(row=r, column=c, sticky="w", padx=(0, 18), pady=1)
         if not summary["heroes"]:

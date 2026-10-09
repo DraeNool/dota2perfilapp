@@ -156,9 +156,20 @@ def summarize(matches_newest_first: list[dict]) -> dict:
         durs = [int(m.get("duration") or 0) for m, w in zip(ms, wins, strict=True) if pred(w)]
         return sum(durs) / len(durs) / 60 if durs else None
 
+    # Solo con Stratz: posición jugada por partida, GPM/XPM.
+    positions: dict[int, tuple[int, int, float | None]] = {}
+    if any(m.get("position") for m in ms):
+        for pos in range(1, 6):
+            positions[pos] = split(lambda m, p=pos: m.get("position") == p)
+    for h in heroes:
+        rows_h = [m for m in ms if opendota._coerce_hero_id(m.get("hero_id")) == h["hero_id"] and m.get("gpm")]
+        if rows_h:
+            h["gpm"] = sum(int(m["gpm"]) for m in rows_h) / len(rows_h)
+            h["xpm"] = sum(int(m.get("xpm") or 0) for m in rows_h) / len(rows_h)
+
     return {
         "total": len(ms), "windows": windows, "streak": streak,
-        "solo": solo, "party": party, "periods": periods, "heroes": heroes,
+        "solo": solo, "party": party, "periods": periods, "heroes": heroes, "positions": positions,
         "avg_minutes_win": avg_minutes(lambda w: w), "avg_minutes_loss": avg_minutes(lambda w: not w),
         "last_start": int(ms[0].get("start_time") or 0) if ms else None,
     }
@@ -213,6 +224,14 @@ def insights(summary: dict, hero_names: dict[int, str] | None = None) -> list[tu
         if best[2] - worst[2] >= 0.10:
             out.append(("info", f"Tu mejor horario es la {best[0]} ({pct(best[2])}, {best[1]} pj); "
                                 f"la {worst[0]} te rinde {pct(worst[2])}."))
+
+    pos_rows = [(p, g, r) for p, (_, g, r) in (summary.get("positions") or {}).items() if g >= 10 and r is not None]
+    if len(pos_rows) >= 2:
+        best = max(pos_rows, key=lambda t: t[2])
+        worst = min(pos_rows, key=lambda t: t[2])
+        if best[2] - worst[2] >= 0.08:
+            out.append(("info", f"Rendís mejor de pos {best[0]} ({pct(best[2])}, {best[1]} pj) que de pos {worst[0]} "
+                                f"({pct(worst[2])}, {worst[1]} pj)."))
 
     good = [h for h in summary["heroes"] if h["games"] >= 8 and h["wr"] >= 0.55]
     bad = [h for h in summary["heroes"] if h["games"] >= 8 and h["wr"] < 0.45]

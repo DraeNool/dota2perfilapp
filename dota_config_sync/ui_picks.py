@@ -6,7 +6,7 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-from . import dota2protracker, hero_images, opendota, picks
+from . import dota2protracker, hero_images, opendota, picks, stratz
 from .theme import C
 from .widgets import TabContext, card, section_label
 
@@ -675,6 +675,20 @@ class PicksTab(ctk.CTkFrame):
         self._loaded_static = True
         self.ctx.log(f"Picks: meta {patch or '?'} listo · {len(self.data.hero_stats)} héroes con stats por bracket")
         self.after(0, self._schedule_recompute)
+        self._load_position_stats()
+
+    def _load_position_stats(self):
+        """Stratz: cómo rinde cada héroe en cada posición de tu bracket (una consulta, caché 24 h)."""
+        token = self.ctx.cfg.stratz_api_token
+        if not token:
+            return
+        stats = stratz.fetch_position_stats(self.data.bracket, token, self.ctx.cfg.opendota_stats_ttl_seconds)
+        if stats:
+            self.data.position_stats = stats
+            self._stats_bracket = self.data.bracket
+            self.ctx.log(f"Picks: stats por posición de Stratz para {len(stats)} héroes "
+                         f"(bracket {picks.BRACKET_NAMES.get(self.data.bracket or 0, 'todos')})")
+            self.after(0, self._schedule_recompute)
 
     def _ensure_tables(self, heroes: list[int]):
         """Baja (o lee de caché) la tabla de matchups de cada héroe nuevo; el recompute vuelve a correr al llegar."""
@@ -683,10 +697,20 @@ class PicksTab(ctk.CTkFrame):
             return
         self._matchups_in_flight.update(missing)
 
+        cfg = self.ctx.cfg
+        token = cfg.stratz_api_token
+
         def worker():
             for h in missing:
                 # Una tabla vacía se guarda como {}: cuenta como "sin muestra" y no se reintenta en la sesión.
-                self.data.matchups[h] = picks.fetch_matchups(h, self.ctx.cfg.opendota_stats_ttl_seconds)
+                if token:
+                    # Stratz: matchups filtrados a TU bracket, más sinergia con cada aliado posible.
+                    vs, with_ = stratz.fetch_hero_matchups(h, self.data.bracket, token, cfg.opendota_stats_ttl_seconds)
+                    self.data.matchups[h] = vs or picks.fetch_matchups(h, cfg.opendota_stats_ttl_seconds)
+                    if with_:
+                        self.data.synergy[h] = with_
+                else:
+                    self.data.matchups[h] = picks.fetch_matchups(h, cfg.opendota_stats_ttl_seconds)
                 self._matchups_in_flight.discard(h)
                 self.after(0, self._schedule_recompute)
 
@@ -711,6 +735,8 @@ class PicksTab(ctk.CTkFrame):
 
         needed = list(state.enemies) if state.enemies else [r.hero_id for r in recs]
         needed += [r.hero_id for r in firsts]
+        if self.ctx.cfg.stratz_api_token:
+            needed += list(state.allies)   # su tabla "with" da la sinergia real con cada candidato
         self._ensure_tables(needed)
         known = sum(1 for h in needed if h in self.data.matchups)
         tables = (f"counters {known}/{len(needed)} tablas" if state.enemies

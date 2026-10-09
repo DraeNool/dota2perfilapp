@@ -496,6 +496,77 @@ def test_parse_d2pt_relations_groups_rows_by_y_position():
     assert rel.worst_against == {11: {128}}
 
 
+# ── stratz (parsers puros) ─────────────────────────────────────────────────────
+def test_stratz_parse_matchups_and_position_stats():
+    from dota_config_sync import stratz
+
+    data = {"heroStats": {"heroVsHeroMatchup": {"advantage": [{"heroId": 12,
+            "vs": [{"heroId2": 2, "winsAverage": 0.4, "matchCount": 2000},
+                   {"heroId2": 3, "winsAverage": 0.5, "matchCount": 0}],
+            "with": [{"heroId2": 86, "winsAverage": 0.55, "matchCount": 400}]}]}}}
+    vs, with_ = stratz.parse_matchups(data)
+    assert vs == {2: (2000, 800)} and with_ == {86: (400, 220)}
+    assert stratz.parse_matchups({}) == ({}, {})
+    stats = stratz.parse_position_stats({"heroStats": {"stats": [
+        {"heroId": 55, "position": "POSITION_3", "matchCount": 15310, "winCount": 7953},
+        {"heroId": 55, "position": "POSITION_1", "matchCount": 30, "winCount": 10},
+        {"heroId": 55, "position": "UNKNOWN", "matchCount": 5, "winCount": 1},
+    ]}})
+    assert stats == {55: {3: (15310, 7953), 1: (30, 10)}}
+    assert stratz.bracket_enum(7) == "DIVINE_IMMORTAL" and stratz.bracket_enum(None) == "ALL"
+
+
+def test_stratz_parse_player_matches_normalizes_to_summary_shape():
+    from dota_config_sync import opendota, stratz
+
+    data = {"player": {"steamAccount": {"seasonRank": 75}, "matches": [
+        {"id": 1, "didRadiantWin": False, "durationSeconds": 2705, "startDateTime": 100, "averageRank": 74,
+         "players": [{"heroId": 28, "isVictory": True, "position": "POSITION_3", "lane": "OFF_LANE",
+                      "kills": 14, "deaths": 8, "assists": 27, "goldPerMinute": 614,
+                      "experiencePerMinute": 920, "imp": 17}]},
+        {"id": 2, "didRadiantWin": True, "durationSeconds": 1800, "startDateTime": 200, "averageRank": None,
+         "players": [{"heroId": 55, "isVictory": False, "position": "UNKNOWN", "kills": 1, "deaths": 9, "assists": 3}]},
+    ]}}
+    ms, tier = stratz.parse_player_matches(data)
+    assert tier == 75 and [m["match_id"] for m in ms] == [2, 1]           # más reciente primero
+    assert opendota.is_win(ms[1]) is True and opendota.is_win(ms[0]) is False
+    assert ms[1]["position"] == 3 and ms[1]["gpm"] == 614 and ms[1]["average_rank"] == 74
+    assert ms[0]["position"] is None and ms[0]["average_rank"] is None
+
+
+def test_position_fit_shapes_score_and_first_pick_pool():
+    from dota_config_sync import picks
+
+    data = _pick_data()
+    data.position_stats = {55: {3: (15310, 7953), 2: (361, 187)}, 93: {1: (9000, 4500), 3: (10, 5)}}
+    assert picks.position_fit(55, 3, data)[0] > 0.9                      # casi todas sus partidas en pos 3
+    assert picks.position_fit(93, 3, data)[0] < 0.01
+    assert picks.position_fit(2, 3, data) is None                        # sin datos: cae al ranking D2PT
+    state = picks.DraftState(my_pos=3)
+    ds, slark = picks.score_hero(55, state, data), picks.score_hero(93, state, data)
+    assert ds.parts["position"] > slark.parts["position"]
+    assert any(c.startswith("Pos 3:") for c, _ in ds.chips)
+    assert any(c == "No se juega de pos 3" for c, _ in slark.chips)
+    ids = [r.hero_id for r in picks.rank_all(state, data)]
+    assert 93 not in ids and 55 in ids and 2 in ids                      # Slark no se juega de pos 3
+    data.synergy = {3: {55: (500, 300)}}                                  # Bane con Dark Seer: 60 %
+    with_ally = picks.score_hero(55, picks.DraftState(my_pos=3, allies=[3]), data)
+    assert any("con Bane" in c for c, _ in with_ally.chips) and with_ally.score > ds.score
+
+
+def test_summarize_positions_and_gpm_only_with_stratz_fields():
+    from dota_config_sync.performance import summarize
+
+    plain = summarize([_match(True), _match(False)])
+    assert plain["positions"] == {} and "gpm" not in plain["heroes"][0]
+    rich = [dict(_match(True), position=3, gpm=600, xpm=800), dict(_match(False), position=3, gpm=400, xpm=500),
+            dict(_match(True, hero=93), position=1, gpm=700, xpm=900)]
+    s = summarize(rich)
+    assert s["positions"][3] == (1, 2, 0.5) and s["positions"][1] == (1, 1, 1.0)
+    ds = next(h for h in s["heroes"] if h["hero_id"] == 55)
+    assert ds["gpm"] == 500 and ds["xpm"] == 650
+
+
 # ── performance (resumen y MMR estimado, sin red) ──────────────────────────────
 def _match(win, hero=55, rank=75, start=1_790_000_000, party=1, k=5, d=3, a=10):
     return {"player_slot": 1, "radiant_win": win, "hero_id": hero, "average_rank": rank,

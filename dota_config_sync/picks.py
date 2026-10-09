@@ -176,6 +176,9 @@ class PickData:
     roles: dict[str, list[int]] = field(default_factory=dict)
     relations: D2ptRelations = field(default_factory=D2ptRelations)
     bracket: int | None = None
+    # Solo con Stratz: sinergia héroe→aliado (partidas, victorias juntos) y stats por posición en el bracket.
+    synergy: dict[int, dict[int, tuple[int, int]]] = field(default_factory=dict)
+    position_stats: dict[int, dict[int, tuple[int, int]]] = field(default_factory=dict)
 
     def name(self, hid: int) -> str:
         return self.hero_names.get(hid, f"Hero #{hid}")
@@ -291,6 +294,25 @@ def counter_exposure(hero: int, data: PickData) -> tuple[float, list[int]] | Non
     return exposed / total, [o for _, o in counters[:3]]
 
 
+POSITION_PRIOR_GAMES = 100
+
+
+def position_fit(hero: int, pos: int, data: PickData) -> tuple[float, float, int] | None:
+    """
+    (cuota de sus partidas jugadas en `pos`, winrate suavizado en esa posición, partidas ahí)
+    desde las stats por posición de Stratz; None si no hay datos del héroe.
+    """
+    by_pos = data.position_stats.get(hero)
+    if not by_pos:
+        return None
+    total = sum(g for g, _ in by_pos.values())
+    games, wins = by_pos.get(pos, (0, 0))
+    if total <= 0:
+        return None
+    wr = (wins + 0.5 * POSITION_PRIOR_GAMES) / (games + POSITION_PRIOR_GAMES)
+    return games / total, wr, games
+
+
 # Con quién se cruza cada posición en la fase de líneas (safe vs offlane, mid vs mid).
 LANE_OPPONENTS = {1: {3, 4}, 5: {3, 4}, 3: {1, 5}, 4: {1, 5}, 2: {2}}
 LANE_WEIGHT = 1.5
@@ -378,6 +400,18 @@ def score_hero(hero: int, state: DraftState, data: PickData,
         ranked = data.roles.get(f"pos {state.my_pos}", [])
         pos_rank = ranked.index(hero) if hero in ranked else None
         parts["position"] = (1.0 - 0.08 * pos_rank) if pos_rank is not None else 0.35
+        fit = position_fit(hero, state.my_pos, data)
+        if fit:
+            share, wr_pos, _ = fit
+            # Stratz: cuánto se juega en esa posición y cómo le va ahí, para los 127 (no solo el top de D2PT).
+            played = _clamp(share / 0.25)
+            parts["position"] = max(parts["position"] if pos_rank is not None else 0.0,
+                                    0.3 + 0.7 * played * _clamp((wr_pos - 0.42) / 0.16))
+            if share >= 0.05:
+                chips.append((f"Pos {state.my_pos}: {wr_pos:.0%} · {share:.0%} de sus partidas",
+                              "g" if wr_pos >= 0.53 and share >= 0.15 else "r" if wr_pos <= 0.47 else ""))
+            else:
+                chips.append((f"No se juega de pos {state.my_pos}", "r"))
         if pos_rank is not None:
             chips.append((f"D2PT #{pos_rank + 1} pos {state.my_pos}", "g" if pos_rank < 3 else ""))
     else:
@@ -385,6 +419,14 @@ def score_hero(hero: int, state: DraftState, data: PickData,
 
     synergy = 0.0
     for ally in state.allies:
+        row = data.synergy.get(ally, {}).get(hero) or data.synergy.get(hero, {}).get(ally)
+        if row and row[0] >= POPULAR_MIN_GAMES:
+            # Stratz: winrate real jugando juntos en tu bracket; ±6 % = sinergia (o anti-sinergia) a fondo.
+            d = matchup_winrate(row[0], row[1]) - 0.5
+            synergy += max(-SYNERGY_POINTS, min(SYNERGY_POINTS, d / 0.06 * SYNERGY_POINTS))
+            if abs(d) >= 0.02:
+                chips.append((f"{d:+.0%} con {data.name(ally)}", "g" if d > 0 else "r"))
+            continue
         if ally in data.relations.best_with.get(hero, ()) or hero in data.relations.best_with.get(ally, ()):
             synergy += SYNERGY_POINTS
             chips.append((f"Best with {data.name(ally)}", "g"))
@@ -426,6 +468,10 @@ def has_enough_sample(r: Recommendation, state: DraftState, data: PickData) -> b
     (la que todavía no llegó se muestra mientras tanto). Con enemigos y sus tablas ya bajadas:
     fuera el héroe que no aparece contra ninguno de ellos.
     """
+    if state.my_pos and data.position_stats:
+        fit = position_fit(r.hero_id, state.my_pos, data)
+        if fit and fit[0] < 0.05:
+            return False          # no se juega en tu posición: no es un pick para vos
     if not state.enemies:
         return r.hero_id not in data.matchups or counter_exposure(r.hero_id, data) is not None
     if all(e in data.matchups for e in state.enemies):
@@ -457,7 +503,14 @@ def meta_first_picks(state: DraftState, data: PickData, limit: int = 5,
     """
     if not state.my_pos:
         return []
-    pool = set(data.roles.get(f"pos {state.my_pos}", [])) - state.taken()
+    pool = set(data.roles.get(f"pos {state.my_pos}", []))
+    if data.position_stats:
+        # Stratz: el meta de la posición son los héroes que se juegan ahí de verdad (≥15 % de sus partidas),
+        # entre los más jugados en esa posición del bracket — no solo el top corto de D2PT.
+        at_pos = {h: position_fit(h, state.my_pos, data) for h in data.hero_names}
+        popular = sorted((h for h, f in at_pos.items() if f and f[0] >= 0.15), key=lambda h: -at_pos[h][2])  # type: ignore[index]
+        pool |= set(popular[:40])
+    pool -= state.taken()
     blind = DraftState(my_pos=state.my_pos, allies=state.allies)
     # El tier sale del ranking de TODA la pool a ciegas, no del puñado de héroes de la posición.
     ranked = rank_all(blind, data, weights or FIRST_PICK_WEIGHTS)
