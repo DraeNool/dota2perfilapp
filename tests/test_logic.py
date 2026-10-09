@@ -196,39 +196,6 @@ def test_generate_backs_up_existing(tmp_path):
     assert backups[0].read_text(encoding="utf-8") == "// viejo\n"
 
 
-# ── picks (puntuación pura) ────────────────────────────────────────────────────
-def _pick_data():
-    from dota_config_sync import picks
-
-    names = {1: "Anti-Mage", 2: "Axe", 3: "Bane", 12: "Phantom Lancer", 55: "Dark Seer", 93: "Slark"}
-    stats = {
-        2: {"7_pick": 10000, "7_win": 5300, "pub_pick": 100000, "pub_win": 50000},
-        55: {"7_pick": 8000, "7_win": 4400, "pub_pick": 80000, "pub_win": 40000},
-        93: {"7_pick": 9000, "7_win": 4300, "pub_pick": 90000, "pub_win": 45000},
-        1: {"7_pick": 9000, "7_win": 4500},
-        3: {"7_pick": 3000, "7_win": 1500},
-    }
-    # Tabla del ENEMIGO (PL, id 12): victorias de PL contra cada héroe.
-    matchups = {
-        12: {
-            2: (2000, 800),      # Axe gana 60 % vs PL
-            55: (2000, 900),     # Dark Seer 55 % vs PL
-            93: (2000, 1100),    # Slark 45 % vs PL
-            1: (2000, 1000),
-        },
-    }
-    player = {
-        55: {"hero_id": "55", "games": 31, "win": 20, "against_games": 10, "against_win": 3},
-        93: {"hero_id": "93", "games": 14, "win": 6},
-        12: {"hero_id": "12", "games": 2, "win": 1, "against_games": 12, "against_win": 4},
-    }
-    rel = picks.D2ptRelations(best_with={55: {3}}, best_against={2: {12}})
-    return picks.PickData(
-        hero_names=names, hero_stats=stats, matchups=matchups, player_heroes=player,
-        roles={"pos 3": [2, 55, 93]}, relations=rel, bracket=7,
-    )
-
-
 def test_layout_tiles_groups_by_attribute_filters_and_wraps():
     from dota_config_sync.ui_picks import GAP, HEADER_H, PAD, TILE_H, TILE_W, layout_tiles
 
@@ -254,43 +221,6 @@ def test_layout_tiles_groups_by_attribute_filters_and_wraps():
     assert largo_x == PAD + TILE_W + GAP                           # misma fila, segunda columna
 
 
-def test_bracket_from_rank_tier():
-    from dota_config_sync.picks import bracket_from_rank_tier
-
-    assert bracket_from_rank_tier(75) == 7
-    assert bracket_from_rank_tier(None) is None
-    assert bracket_from_rank_tier(80) == 8
-
-
-def test_recommend_ranks_counter_and_own_hero_first_and_skips_taken():
-    from dota_config_sync import picks
-
-    state = picks.DraftState(my_pos=3, allies=[3], enemies=[12], bans=[1])
-    recs = picks.recommend(state, _pick_data(), limit=5)
-    order = [r.hero_id for r in recs]
-    assert 1 not in order and 12 not in order and 3 not in order
-    assert order[:2] in ([55, 2], [2, 55])            # Dark Seer (propio+sinergia) y Axe (counter) arriba
-    assert order.index(93) > order.index(55)           # Slark pierde vs PL y tiene mal winrate propio
-    dark_seer = next(r for r in recs if r.hero_id == 55)
-    assert any("Best with Bane" in c for c, _ in dark_seer.chips)
-    assert "counter de phantom lancer" in dark_seer.reason.lower()
-
-
-def test_lane_opponent_weighs_more_in_counters():
-    from dota_config_sync import picks
-
-    data = _pick_data()
-    data.matchups[12][1] = (2000, 1200)        # Anti-Mage pierde 40 % vs PL
-    data.matchups[3] = {1: (2000, 800)}        # ...pero gana 60 % vs Bane
-    base = picks.DraftState(my_pos=3, enemies=[12, 3])
-    lane = picks.DraftState(my_pos=3, enemies=[12, 3], enemy_pos={12: 1})   # PL es el carry: tu línea
-    assert picks.is_lane_opponent(3, 1) and not picks.is_lane_opponent(3, 2)
-    d_base = picks.score_hero(1, base, data).parts["counters"]
-    d_lane = picks.score_hero(1, lane, data).parts["counters"]
-    assert d_lane < d_base                      # el mal matchup de línea pesa más
-    assert any("(tu línea)" in c for c, _ in picks.score_hero(1, lane, data).chips)
-
-
 def test_next_medal_thresholds():
     from dota_config_sync.performance import next_medal
 
@@ -308,192 +238,21 @@ def test_insights_read_the_numbers():
         "total": 60,
         "windows": {20: (13, 7, 0.65), 50: (28, 22, 0.56), 100: (0, 0, None)},
         "streak": -3,
-        "solo": (20, 30, 2 / 3), "party": (9, 20, 0.45),
-        "periods": {"mañana": (10, 16, 0.625), "tarde": (5, 20, 0.25), "noche": (6, 10, 0.6)},
-        "heroes": [{"hero_id": 55, "games": 19, "wins": 12, "wr": 12 / 19, "kda": 5.9, "trend": "↑"},
-                   {"hero_id": 93, "games": 14, "wins": 6, "wr": 6 / 14, "kda": 2.1, "trend": "↓"}],
+        "heroes": [{"hero_id": 55, "games": 19, "wins": 12, "wr": 12 / 19, "kda": 5.9, "trend": "↑",
+                    "deaths": 4.0, "position": 3, "bench": {"kills": 5, "deaths": 6, "assists": 13, "kda": 3.0}},
+                   {"hero_id": 93, "games": 14, "wins": 6, "wr": 6 / 14, "kda": 2.1, "trend": "↓",
+                    "deaths": 9.5, "position": 1, "bench": {"kills": 8, "deaths": 6, "assists": 6, "kda": 2.3}}],
         "avg_minutes_win": 36.0, "avg_minutes_loss": 43.0,
     }
     found = insights(summary, {55: "Dark Seer", 93: "Slark"})
     text = " | ".join(t for _, t in found)
     assert "Vas en subida" in text
-    assert "mejor solo" in text
-    assert "mejor horario es la mañana" in text
+    assert "solo" not in text and "horario" not in text and "party" not in text
+    assert "Con Dark Seer tu KDA (5.9) supera al del bracket en pos 3 (3.0)" in text
+    assert "Con Slark morís 9.5 veces por partida; el promedio Divine/Immortal de pos 1 es 6.0" in text
     assert "Dark Seer 63% (19)" in text and "Slark 43% (14)" in text
     assert "3 derrotas seguidas" in text
     assert "derrotas duran 7 min más" in text
-
-
-def test_meta_first_picks_only_role_heroes_minus_taken_sorted():
-    from dota_config_sync import picks
-
-    data = _pick_data()                                   # roles: pos 3 -> [2, 55, 93]
-    state = picks.DraftState(my_pos=3, allies=[93], enemies=[12])
-    recs = picks.meta_first_picks(state, data)
-    assert [r.hero_id for r in recs] == [55, 2] or [r.hero_id for r in recs] == [2, 55]
-    assert recs[0].score >= recs[1].score
-    assert all("vs enemigos" not in c for r in recs for c, _ in r.chips)   # ignora el draft enemigo
-    assert picks.meta_first_picks(picks.DraftState(my_pos=None), data) == []
-
-
-def test_first_pick_weights_favor_meta_over_personal_history():
-    from dota_config_sync import picks
-
-    data = _pick_data()
-    # Dos héroes de pos 3 con tablas iguales y sin counters: Axe es meta (53 %) y nunca jugado;
-    # Slark es flojo en el meta (48 %) pero el usuario lo juega mucho y bien.
-    data.hero_stats[93] = {"7_pick": 9000, "7_win": 4300}
-    data.player_heroes[93] = {"hero_id": "93", "games": 60, "win": 39}
-    neutral = dict.fromkeys(range(900, 925), (1000, 500))
-    data.matchups[2] = dict(neutral)
-    data.matchups[93] = dict(neutral)
-    state = picks.DraftState(my_pos=3)
-    assert picks.weights_for(state) is picks.FIRST_PICK_WEIGHTS
-    assert picks.weights_for(picks.DraftState(my_pos=3, enemies=[12])) is picks.DEFAULT_WEIGHTS
-    first = {r.hero_id: r.score for r in picks.meta_first_picks(state, data)}
-    assert first[2] > first[93]                                   # manda el meta
-    with_history = {r.hero_id: r.score for r in picks.recommend(state, data)}
-    assert with_history[2] > with_history[93]
-    # ...pero el historial sigue desempatando: el mismo Slark sin partidas puntúa menos.
-    data.player_heroes.pop(93)
-    assert picks.meta_first_picks(state, data)[-1].score < first[93]
-
-
-def test_normalize_weights_merges_and_sums_to_one():
-    from dota_config_sync import picks
-
-    w = picks.normalize_weights({"personal": 0, "counters": "0.8", "bogus": 9, "meta": "x"}, picks.DEFAULT_WEIGHTS)
-    assert set(w) == set(picks.DEFAULT_WEIGHTS)
-    assert w["personal"] == 0 and abs(sum(w.values()) - 1) < 1e-9
-    assert w["counters"] > w["meta"] > w["position"]
-    assert picks.normalize_weights(None, picks.FIRST_PICK_WEIGHTS) == picks.FIRST_PICK_WEIGHTS
-    cfg = AppConfig({"picks_weights": {"personal": 0.3}})
-    assert cfg.picks_weights == {"personal": 0.3}
-    assert AppConfig({"picks_weights": "nope"}).picks_weights == {}
-    assert picks.DEFAULT_WEIGHTS["personal"] == 0.10                   # el historial solo desempata
-
-
-def test_my_heroes_in_draft_are_strong_heroes_scored_against_draft():
-    from dota_config_sync import picks
-
-    data = _pick_data()                                   # historial: Dark Seer 31 pj, Slark 14 pj, PL 2 pj
-    state = picks.DraftState(my_pos=3, enemies=[12])
-    mine = picks.my_heroes_in_draft(state, data)
-    ids = [r.hero_id for r in mine]
-    assert ids == [55, 93]                                # PL tiene 2 pj (<5) y además es enemigo
-    assert mine[0].score >= mine[1].score and all(r.tier for r in mine)
-    assert any("vs enemigos" in c for c, _ in mine[0].chips)
-    assert picks.my_heroes_in_draft(state, picks.PickData(hero_names=data.hero_names)) == []
-
-
-def test_tier_for_percentile_with_absolute_cap():
-    from dota_config_sync.picks import tier_for
-
-    assert tier_for(80, 1, 127) == "S+"
-    assert tier_for(80, 6, 127) == "S"          # 4.7 %
-    assert tier_for(80, 12, 127) == "A+"        # 9.4 %
-    assert tier_for(80, 25, 127) == "A"
-    assert tier_for(80, 63, 127) == "B"         # 49.6 %
-    assert tier_for(80, 127, 127) == "C"
-    assert tier_for(58, 1, 127) == "A+"         # el mejor del draft, pero con 58 no es S
-    assert tier_for(44, 1, 127) == "B+"
-    assert tier_for(30, 1, 127) == "C+"
-    assert tier_for(65, 1, 127) == "S"
-
-
-def test_recommend_and_first_picks_carry_tiers():
-    from dota_config_sync import picks
-
-    data = _pick_data()
-    state = picks.DraftState(my_pos=3, enemies=[12])
-    recs = picks.recommend(state, data)
-    assert all(r.tier for r in recs)
-    assert recs[0].tier == picks.tier_for(recs[0].score, 1, len(picks.rank_all(state, data)))
-    order = picks.TIER_ORDER
-    assert all(order.index(a.tier) <= order.index(b.tier) for a, b in zip(recs, recs[1:], strict=False))
-    firsts = picks.meta_first_picks(picks.DraftState(my_pos=3), data)
-    assert firsts and all(f.tier for f in firsts)
-
-
-def test_heroes_without_sample_are_hidden():
-    from dota_config_sync import picks
-
-    data = _pick_data()
-    # Con enemigos y sus tablas bajadas: Bane (3) no aparece en la tabla de PL → fuera de la lista.
-    ids = [r.hero_id for r in picks.recommend(picks.DraftState(my_pos=3, enemies=[12]), data)]
-    assert 3 not in ids and 55 in ids
-    # Tabla del enemigo todavía no bajada: nadie se oculta.
-    data2 = _pick_data()
-    data2.matchups = {}
-    assert 3 in [r.hero_id for r in picks.recommend(picks.DraftState(my_pos=3, enemies=[12]), data2)]
-    # First pick: tabla propia bajada pero sin cobertura → fuera; sin tabla todavía → se muestra.
-    data3 = _pick_data()
-    data3.matchups[55] = {1: (1000, 400)}          # Dark Seer: 1 matchup, cobertura insuficiente
-    first_ids = [r.hero_id for r in picks.recommend(picks.DraftState(my_pos=3), data3)]
-    assert 55 not in first_ids and 2 in first_ids
-    assert 55 not in [r.hero_id for r in picks.meta_first_picks(picks.DraftState(my_pos=3), data3)]
-
-
-def test_meta_winrate_falls_back_to_pub_when_bracket_missing():
-    from dota_config_sync.picks import meta_winrate
-
-    wr, picks_n = meta_winrate({"pub_pick": 1000, "pub_win": 600}, bracket=7)
-    assert picks_n == 1000 and 0.55 < wr < 0.6
-    assert meta_winrate(None, 7) == (0.5, 0)
-
-
-def test_draft_alerts_warn_on_weak_matchup_and_history():
-    from dota_config_sync import picks
-
-    state = picks.DraftState(my_pos=3, allies=[55, 3], enemies=[12])
-    alerts = picks.draft_alerts(state, _pick_data())
-    texts = [t for _, t in alerts]
-    assert any("castiga a tu Slark: pierde 55%" in t for t in texts)
-    assert any("Vos perdés 67% cuando enfrentás a Phantom Lancer" in t for t in texts)
-    assert any("countera a tu aliado Dark Seer" in t for t in texts) is False   # Dark Seer le gana 55 % a PL
-    assert any("Dark Seer + Bane" in t for t in texts)
-
-
-def test_first_pick_mode_uses_counter_exposure():
-    from dota_config_sync import picks
-
-    data = _pick_data()
-    # Tabla propia de Axe: Anti-Mage le gana 60 % (9000 picks en el bracket), Bane 48 %, Dark Seer 50 %,
-    # más 17 héroes de relleno al 50 % (peso 1) para superar la cobertura mínima.
-    data.matchups[2] = {1: (1000, 400), 3: (1000, 520), 55: (1000, 500)}
-    data.matchups[2].update({900 + i: (1000, 500) for i in range(17)})
-    data.hero_stats[1]["7_pick"] = 9000
-    data.hero_stats[3]["7_pick"] = 3000
-    data.hero_stats[55]["7_pick"] = 8000
-    exposure, worst = picks.counter_exposure(2, data)
-    assert worst == [1]
-    assert abs(exposure - 9000 / (9000 + 3000 + 8000 + 17)) < 1e-9   # ponderado por picks del bracket
-    thin = picks.PickData(matchups={5: {1: (1000, 400), 3: (1000, 400)}}, hero_names={5: "x"})
-    assert picks.counter_exposure(5, thin) is None                   # pocos matchups: no se opina
-    state = picks.DraftState(my_pos=3)                                # sin enemigos: first pick
-    axe = picks.score_hero(2, state, data)
-    assert axe.parts["counters"] == 0.0                               # 45 % del pool lo countera → nada seguro
-    assert any("First pick: 45%" in c for c, _ in axe.chips)
-    assert "arriesgado de first" in axe.reason.lower() and "Anti-Mage" in axe.reason
-    unknown = picks.score_hero(93, state, data)             # sin tabla propia: leve malus, no se premia
-    assert unknown.parts["counters"] == 0.4
-    recs = picks.recommend(state, data)
-    alerts = picks.draft_alerts(state, data, recs=recs)
-    assert any("Axe de first es arriesgado" in t for _, t in alerts)
-
-
-def test_parse_d2pt_relations_groups_rows_by_y_position():
-    from dota_config_sync import picks
-
-    cfg = {"categories": [
-        {"category_name": "Top Heroes Pos 1", "y_position": 0, "x_position": 0, "hero_ids": [11, 48]},
-        {"category_name": "Best with", "y_position": 20, "x_position": 75, "hero_ids": [62, 90]},
-        {"category_name": "Worst against", "y_position": 20, "x_position": 945, "hero_ids": [128]},
-        {"category_name": "Best with", "y_position": 95, "x_position": 75, "hero_ids": [83]},
-    ]}
-    rel = picks.parse_d2pt_relations([cfg])
-    assert rel.best_with == {11: {62, 90}, 48: {83}}
-    assert rel.worst_against == {11: {128}}
 
 
 # ── stratz (parsers puros) ─────────────────────────────────────────────────────
@@ -512,7 +271,12 @@ def test_stratz_parse_matchups_and_position_stats():
         {"heroId": 55, "position": "POSITION_1", "matchCount": 30, "winCount": 10},
         {"heroId": 55, "position": "UNKNOWN", "matchCount": 5, "winCount": 1},
     ]}})
-    assert stats == {55: {3: (15310, 7953), 1: (30, 10)}}
+    assert stats == {55: {3: {"games": 15310, "wins": 7953, "kills": 0.0, "deaths": 0.0, "assists": 0.0},
+                          1: {"games": 30, "wins": 10, "kills": 0.0, "deaths": 0.0, "assists": 0.0}}}
+    kda = stratz.parse_position_stats({"heroStats": {"stats": [
+        {"heroId": 55, "position": "POSITION_3", "matchCount": 10, "winCount": 5, "kills": 5.68, "deaths": 6.21,
+         "assists": 13.22}]}})
+    assert kda[55][3]["deaths"] == 6.21 and kda[55][3]["assists"] == 13.22
     assert stratz.bracket_enum(7) == "DIVINE_IMMORTAL" and stratz.bracket_enum(None) == "ALL"
 
 
@@ -534,26 +298,6 @@ def test_stratz_parse_player_matches_normalizes_to_summary_shape():
     assert ms[0]["position"] is None and ms[0]["average_rank"] is None
 
 
-def test_position_fit_shapes_score_and_first_pick_pool():
-    from dota_config_sync import picks
-
-    data = _pick_data()
-    data.position_stats = {55: {3: (15310, 7953), 2: (361, 187)}, 93: {1: (9000, 4500), 3: (10, 5)}}
-    assert picks.position_fit(55, 3, data)[0] > 0.9                      # casi todas sus partidas en pos 3
-    assert picks.position_fit(93, 3, data)[0] < 0.01
-    assert picks.position_fit(2, 3, data) is None                        # sin datos: cae al ranking D2PT
-    state = picks.DraftState(my_pos=3)
-    ds, slark = picks.score_hero(55, state, data), picks.score_hero(93, state, data)
-    assert ds.parts["position"] > slark.parts["position"]
-    assert any(c.startswith("Pos 3:") for c, _ in ds.chips)
-    assert any(c == "No se juega de pos 3" for c, _ in slark.chips)
-    ids = [r.hero_id for r in picks.rank_all(state, data)]
-    assert 93 not in ids and 55 in ids and 2 in ids                      # Slark no se juega de pos 3
-    data.synergy = {3: {55: (500, 300)}}                                  # Bane con Dark Seer: 60 %
-    with_ally = picks.score_hero(55, picks.DraftState(my_pos=3, allies=[3]), data)
-    assert any("con Bane" in c for c, _ in with_ally.chips) and with_ally.score > ds.score
-
-
 def test_summarize_positions_and_gpm_only_with_stratz_fields():
     from dota_config_sync.performance import summarize
 
@@ -564,7 +308,20 @@ def test_summarize_positions_and_gpm_only_with_stratz_fields():
     s = summarize(rich)
     assert s["positions"][3] == (1, 2, 0.5) and s["positions"][1] == (1, 1, 1.0)
     ds = next(h for h in s["heroes"] if h["hero_id"] == 55)
-    assert ds["gpm"] == 500 and ds["xpm"] == 650
+    assert ds["gpm"] == 500 and ds["xpm"] == 650 and ds["position"] == 3
+    assert ds["kills"] == 5 and ds["deaths"] == 3 and ds["assists"] == 10
+
+
+def test_benchmark_heroes_adds_bracket_kda_for_played_position():
+    from dota_config_sync.performance import benchmark_heroes
+
+    heroes = [{"hero_id": 55, "games": 4, "position": 3, "kda": 5.0}, {"hero_id": 93, "games": 2, "position": 1},
+              {"hero_id": 2, "games": 1, "position": None}]
+    stats = {55: {3: {"games": 15310, "wins": 7953, "kills": 5.68, "deaths": 6.21, "assists": 13.22}},
+             93: {1: {"games": 50, "wins": 25, "kills": 9, "deaths": 5, "assists": 5}}}   # muestra chica
+    out = benchmark_heroes(heroes, stats)
+    assert out[0]["bench"]["deaths"] == 6.21 and abs(out[0]["bench"]["kda"] - (5.68 + 13.22) / 6.21) < 1e-9
+    assert "bench" not in out[1] and "bench" not in out[2]
 
 
 # ── performance (resumen y MMR estimado, sin red) ──────────────────────────────
@@ -592,7 +349,7 @@ def test_estimate_mmr_series_anchors_and_results():
     assert series[1][1] is not None  # ancla arrastrada de la partida anterior
 
 
-def test_summarize_windows_streak_party_and_heroes():
+def test_summarize_windows_streak_and_heroes():
     from dota_config_sync.performance import summarize
 
     ms = [_match(True), _match(True, party=3), _match(False, hero=93), _match(True, hero=93)]
@@ -600,7 +357,7 @@ def test_summarize_windows_streak_party_and_heroes():
     assert s["total"] == 4
     assert s["windows"][20] == (3, 1, 0.75)
     assert s["streak"] == 2
-    assert s["party"] == (1, 1, 1.0) and s["solo"] == (2, 3, 2 / 3)
+    assert "party" not in s and "solo" not in s and "periods" not in s
     heroes = {h["hero_id"]: h for h in s["heroes"]}
     assert heroes[55]["games"] == 2 and heroes[55]["wr"] == 1.0
     assert heroes[93]["wr"] == 0.5 and heroes[93]["kda"] == 5.0

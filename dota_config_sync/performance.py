@@ -1,5 +1,5 @@
 """
-Pestaña Rendimiento: ranked recientes desde OpenDota, resumen, MMR estimado e historial de medalla.
+Pestaña Rendimiento: ranked recientes, resumen, MMR estimado, historial de medalla y K/D/A contra el bracket.
 
 El MMR real no es público: se estima por el rango promedio del lobby de cada partida
 (mismo enfoque que d2calibrate). El historial de medalla lo construye la app guardando
@@ -9,7 +9,7 @@ un punto por día en progress.json — OpenDota devuelve un solo punto.
 import json
 import logging
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date
 
 from . import http, opendota
 from .paths import progress_path
@@ -88,21 +88,12 @@ def estimate_mmr_series(matches_newest_first: list[dict]) -> list[tuple[dict, in
     return out
 
 
-def _period(start_time: int) -> str:
-    hour = datetime.fromtimestamp(start_time).hour
-    if 6 <= hour < 13:
-        return "mañana"
-    if 13 <= hour < 19:
-        return "tarde"
-    return "noche"
-
-
 def _rate(wins: int, games: int) -> float | None:
     return wins / games if games else None
 
 
 def summarize(matches_newest_first: list[dict]) -> dict:
-    """Winrate por ventana, racha, solo/party, horario y tabla por héroe."""
+    """Winrate por ventana, racha, tabla por héroe (posición y K/D/A medios) y winrate por posición."""
     ms = [m for m in matches_newest_first if opendota.is_win(m) is not None]
     wins = [bool(opendota.is_win(m)) for m in ms]
 
@@ -124,55 +115,68 @@ def summarize(matches_newest_first: list[dict]) -> dict:
         sel = [w for m, w in zip(ms, wins, strict=True) if pred(m)]
         return sum(sel), len(sel), _rate(sum(sel), len(sel))
 
-    solo = split(lambda m: (m.get("party_size") or 1) <= 1)
-    party = split(lambda m: (m.get("party_size") or 1) > 1)
-    periods = {
-        p: split(lambda m, p=p: _period(int(m.get("start_time") or 0)) == p)
-        for p in ("mañana", "tarde", "noche")
-    }
-
-    per_hero: dict[int, list[tuple[bool, int, int, int]]] = defaultdict(list)
+    per_hero: dict[int, list[tuple[bool, dict]]] = defaultdict(list)
     for m, w in zip(ms, wins, strict=True):
         hid = opendota._coerce_hero_id(m.get("hero_id"))
         if hid is not None:
-            per_hero[hid].append((w, int(m.get("kills") or 0), int(m.get("deaths") or 0), int(m.get("assists") or 0)))
+            per_hero[hid].append((w, m))
     heroes = []
     for hid, rows in per_hero.items():
         g = len(rows)
-        hw = sum(1 for r in rows if r[0])
-        k, d, a = (sum(r[i] for r in rows) for i in (1, 2, 3))
-        recent = rows[:5]
-        older = rows[5:10]
+        hw = sum(1 for w, _ in rows if w)
+        k, d, a = (sum(int(m.get(key) or 0) for _, m in rows) for key in ("kills", "deaths", "assists"))
+        recent = [w for w, _ in rows[:5]]
+        older = [w for w, _ in rows[5:10]]
         trend = "→"
         if len(recent) >= 3 and len(older) >= 3:
-            diff = sum(1 for r in recent if r[0]) / len(recent) - sum(1 for r in older if r[0]) / len(older)
+            diff = sum(recent) / len(recent) - sum(older) / len(older)
             trend = "↑" if diff > 0.15 else "↓" if diff < -0.15 else "→"
-        heroes.append({
+        played = [int(m["position"]) for _, m in rows if m.get("position")]
+        row: dict = {
             "hero_id": hid, "games": g, "wins": hw, "wr": hw / g, "kda": (k + a) / max(d, 1), "trend": trend,
-        })
+            "kills": k / g, "deaths": d / g, "assists": a / g,
+            "position": max(set(played), key=played.count) if played else None,
+        }
+        with_gpm = [m for _, m in rows if m.get("gpm")]
+        if with_gpm:
+            row["gpm"] = sum(int(m["gpm"]) for m in with_gpm) / len(with_gpm)
+            row["xpm"] = sum(int(m.get("xpm") or 0) for m in with_gpm) / len(with_gpm)
+        heroes.append(row)
     heroes.sort(key=lambda h: (h["games"], h["wr"]), reverse=True)
 
     def avg_minutes(pred) -> float | None:
         durs = [int(m.get("duration") or 0) for m, w in zip(ms, wins, strict=True) if pred(w)]
         return sum(durs) / len(durs) / 60 if durs else None
 
-    # Solo con Stratz: posición jugada por partida, GPM/XPM.
+    # Solo con Stratz: posición jugada por partida.
     positions: dict[int, tuple[int, int, float | None]] = {}
     if any(m.get("position") for m in ms):
         for pos in range(1, 6):
             positions[pos] = split(lambda m, p=pos: m.get("position") == p)
-    for h in heroes:
-        rows_h = [m for m in ms if opendota._coerce_hero_id(m.get("hero_id")) == h["hero_id"] and m.get("gpm")]
-        if rows_h:
-            h["gpm"] = sum(int(m["gpm"]) for m in rows_h) / len(rows_h)
-            h["xpm"] = sum(int(m.get("xpm") or 0) for m in rows_h) / len(rows_h)
 
     return {
-        "total": len(ms), "windows": windows, "streak": streak,
-        "solo": solo, "party": party, "periods": periods, "heroes": heroes, "positions": positions,
+        "total": len(ms), "windows": windows, "streak": streak, "heroes": heroes, "positions": positions,
         "avg_minutes_win": avg_minutes(lambda w: w), "avg_minutes_loss": avg_minutes(lambda w: not w),
         "last_start": int(ms[0].get("start_time") or 0) if ms else None,
     }
+
+
+BENCH_MIN_GAMES = 100   # partidas del bracket en ese héroe+posición para que el promedio valga
+
+
+def benchmark_heroes(heroes: list[dict], position_stats: dict[int, dict[int, dict]]) -> list[dict]:
+    """
+    Agrega a cada fila de héroe el promedio del bracket para ese héroe EN la posición que jugaste
+    (K/D/A y KDA, de Stratz): h["bench"] = {kills, deaths, assists, kda}. Sin dato, no agrega nada.
+    """
+    for h in heroes:
+        pos = h.get("position")
+        row = (position_stats.get(h["hero_id"]) or {}).get(pos) if pos else None
+        if not row or row.get("games", 0) < BENCH_MIN_GAMES:
+            continue
+        k, d, a = float(row["kills"]), float(row["deaths"]), float(row["assists"])
+        h["bench"] = {"kills": k, "deaths": d, "assists": a, "kda": (k + a) / max(d, 0.1)}
+    return heroes
 
 
 # ── Lectura: de los números a frases que dicen qué hacer ──────────────────────
@@ -206,24 +210,9 @@ def insights(summary: dict, hero_names: dict[int, str] | None = None) -> list[tu
             out.append(("ok", f"Vas en subida: {pct(r20)} en las últimas 20 contra {pct(r50)} en las últimas 50."))
         elif r50 - r20 >= 0.07:
             out.append(("warn", f"Vas en bajada: {pct(r20)} en las últimas 20 contra {pct(r50)} en las últimas 50. "
-                                "Revisá qué cambió: héroes nuevos, horario, party."))
+                                "Revisá qué cambió: héroes nuevos, posición, racha."))
         else:
             out.append(("info", f"Estable: {pct(r20)} en las últimas 20, {pct(r50)} en 50."))
-
-    sw, sg, sr = summary["solo"]
-    pw, pg, pr = summary["party"]
-    if sg >= 15 and pg >= 15 and sr is not None and pr is not None and abs(sr - pr) >= 0.08:
-        better, worse = ("solo", "party") if sr > pr else ("party", "solo")
-        out.append(("info", f"Rendís mejor {better} ({pct(max(sr, pr))}) que en {worse} ({pct(min(sr, pr))}). "
-                            f"Si el objetivo es MMR, priorizá jugar {better}."))
-
-    periods = [(n, g, r) for n, (_, g, r) in summary["periods"].items() if g >= 15 and r is not None]
-    if len(periods) >= 2:
-        best = max(periods, key=lambda t: t[2])
-        worst = min(periods, key=lambda t: t[2])
-        if best[2] - worst[2] >= 0.10:
-            out.append(("info", f"Tu mejor horario es la {best[0]} ({pct(best[2])}, {best[1]} pj); "
-                                f"la {worst[0]} te rinde {pct(worst[2])}."))
 
     pos_rows = [(p, g, r) for p, (_, g, r) in (summary.get("positions") or {}).items() if g >= 10 and r is not None]
     if len(pos_rows) >= 2:
@@ -241,6 +230,20 @@ def insights(summary: dict, hero_names: dict[int, str] | None = None) -> list[tu
     if bad:
         low = ", ".join(f"{names.get(h['hero_id'], h['hero_id'])} {pct(h['wr'])} ({h['games']})" for h in bad[:2])
         out.append(("warn", f"Te restan: {low}. Practicalos en unranked antes de volver a pickearlos."))
+
+    bench_lines = 0
+    for h in [h for h in summary["heroes"] if h.get("bench") and h["games"] >= 5]:
+        if bench_lines >= 2:
+            break
+        name, b = names.get(h["hero_id"], h["hero_id"]), h["bench"]
+        if h["deaths"] >= 1.3 * b["deaths"] and h["deaths"] - b["deaths"] >= 1.5:
+            out.append(("warn", f"Con {name} morís {h['deaths']:.1f} veces por partida; el promedio Divine/Immortal "
+                                f"de pos {h['position']} es {b['deaths']:.1f}. Jugá más atrás: el resto lo tenés."))
+            bench_lines += 1
+        elif h["kda"] >= 1.25 * b["kda"] and h["games"] >= 8:
+            out.append(("ok", f"Con {name} tu KDA ({h['kda']:.1f}) supera al del bracket en pos {h['position']} "
+                              f"({b['kda']:.1f}): lo jugás mejor que la media de tu rango."))
+            bench_lines += 1
 
     streak = summary["streak"]
     if streak <= -3:

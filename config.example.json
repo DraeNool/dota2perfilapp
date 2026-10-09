@@ -8,8 +8,9 @@
   "hero_map_ttl_seconds": 86400,
   "opendota_min_interval": 1.1,
   "meta_grids_ttl_seconds": 3600,
-  "picks_weights": {"meta": 0.30, "counters": 0.45, "position": 0.15, "personal": 0.10},
-  "first_pick_weights": {"meta": 0.40, "counters": 0.35, "position": 0.15, "personal": 0.10},
+  "meta_ttl_seconds": 21600,
+  "picks_weights": {"meta": 0.35, "counters": 0.45, "synergy": 0.20},
+  "first_pick_weights": {"meta": 0.50, "safety": 0.30, "synergy": 0.20},
   "meta_meta": {
     "config_name": "Meta Meta",
     "categories": [

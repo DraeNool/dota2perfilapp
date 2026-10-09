@@ -30,7 +30,8 @@ query($h: Short!, $b: [RankBracketBasicEnum]) {
 
 Q_POSITION_STATS = """
 query($b: [RankBracketBasicEnum]) {
-  heroStats { stats(bracketBasicIds: $b, groupByPosition: true) { heroId position matchCount winCount } } }"""
+  heroStats { stats(bracketBasicIds: $b, groupByPosition: true) {
+    heroId position matchCount winCount kills deaths assists } } }"""
 
 PAGE = 100   # Stratz: take máximo por consulta
 
@@ -93,9 +94,9 @@ def parse_matchups(data: dict) -> tuple[dict[int, tuple[int, int]], dict[int, tu
     return _table(adv[0].get("vs")), _table(adv[0].get("with"))
 
 
-def parse_position_stats(data: dict) -> dict[int, dict[int, tuple[int, int]]]:
-    """{hero_id: {posición 1..5: (partidas, victorias)}} en el bracket pedido."""
-    out: dict[int, dict[int, tuple[int, int]]] = {}
+def parse_position_stats(data: dict) -> dict[int, dict[int, dict]]:
+    """{hero_id: {posición 1..5: {games, wins, kills, deaths, assists}}} en el bracket pedido (K/D/A: promedios)."""
+    out: dict[int, dict[int, dict]] = {}
     for row in ((data or {}).get("heroStats") or {}).get("stats") or []:
         pos = POSITION_NUM.get(str(row.get("position")))
         try:
@@ -103,8 +104,17 @@ def parse_position_stats(data: dict) -> dict[int, dict[int, tuple[int, int]]]:
         except (KeyError, TypeError, ValueError):
             continue
         if pos and games > 0:
-            out.setdefault(hid, {})[pos] = (games, wins)
+            out.setdefault(hid, {})[pos] = {
+                "games": games, "wins": wins,
+                "kills": float(row.get("kills") or 0), "deaths": float(row.get("deaths") or 0),
+                "assists": float(row.get("assists") or 0),
+            }
     return out
+
+
+def fetch_position_stats_table(bracket_name: str, token: str, ttl: int) -> dict[int, dict[int, dict]]:
+    data = query(Q_POSITION_STATS, {"b": [bracket_name]}, token, ttl)
+    return parse_position_stats(data) if data else {}
 
 
 def parse_player_matches(data: dict) -> tuple[list[dict], int | None]:
@@ -136,14 +146,10 @@ def parse_player_matches(data: dict) -> tuple[list[dict], int | None]:
 
 
 # ── Fetchers ─────────────────────────────────────────────────────────────────
-def fetch_hero_matchups(hero_id: int, bracket: int | None, token: str, ttl: int):
-    data = query(Q_MATCHUPS, {"h": hero_id, "b": [bracket_enum(bracket)]}, token, ttl)
+def fetch_hero_matchups(hero_id: int, bracket_name: str, token: str, ttl: int):
+    """(vs, with) del héroe en el bracket (nombre del enum, p.ej. "DIVINE_IMMORTAL")."""
+    data = query(Q_MATCHUPS, {"h": hero_id, "b": [bracket_name]}, token, ttl)
     return parse_matchups(data) if data else ({}, {})
-
-
-def fetch_position_stats(bracket: int | None, token: str, ttl: int) -> dict[int, dict[int, tuple[int, int]]]:
-    data = query(Q_POSITION_STATS, {"b": [bracket_enum(bracket)]}, token, ttl)
-    return parse_position_stats(data) if data else {}
 
 
 def fetch_player_matches(steam_id3: str, take: int, token: str, ttl: int) -> tuple[list[dict], int | None, str]:

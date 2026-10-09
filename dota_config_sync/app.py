@@ -68,7 +68,6 @@ class App(ctk.CTk):
 
         self.steam_path = None
         self.accounts = []
-        self._profiles_loaded = False
         self.tab_ctx = TabContext(
             cfg=cfg, log=self._log_async, status=self._set_status_async,
             accounts=lambda: self.accounts, main_account=self._main_account, hero_map=opendota.get_hero_map,
@@ -136,7 +135,16 @@ class App(ctk.CTk):
 
         self._build_api_key_row()
 
-        self._lbl(self.scroll, "CUENTAS STEAM")
+        acc_hdr = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        acc_hdr.pack(fill="x", pady=(12, 0))
+        ctk.CTkLabel(acc_hdr, text="CUENTAS STEAM", font=ctk.CTkFont(size=10, weight="bold"),
+                     text_color=C["txt3"], anchor="w").pack(side="left")
+        self.btn_profiles = ctk.CTkButton(
+            acc_hdr, text="⟳  Cargar perfiles (rango, winrate, avatares)", width=260, height=28,
+            fg_color=C["accent2"], hover_color=C["accent3"], text_color="#ffffff",
+            font=ctk.CTkFont(size=12, weight="bold"), command=self._reload_profiles,
+        )
+        self.btn_profiles.pack(side="right")
         row = ctk.CTkFrame(self.scroll, fg_color="transparent")
         row.pack(fill="x", pady=(6, 0))
         row.columnconfigure(0, weight=1)
@@ -468,8 +476,8 @@ class App(ctk.CTk):
         self.card_dst.load_accounts(accounts)
         self._load_grid_targets()
         self._preload_hero_map()
-        self.picks_tab.set_accounts()
         self.perf_tab.set_accounts()
+        self._on_tab_change()
         self.status.set(f"{len(accounts)} cuenta(s) encontradas", "ok")
         self.status.set_right(r"userdata\...\570")
 
@@ -486,10 +494,9 @@ class App(ctk.CTk):
         self._update_op_desc()
 
     def _on_tab_change(self):
-        """Los perfiles (48 llamadas a OpenDota/Steam) se cargan la primera vez que se entra a Perfiles."""
-        if self.tabs.get() == "Perfiles" and not self._profiles_loaded and self.accounts:
-            self._profiles_loaded = True
-            self._reload_profiles()
+        """Rendimiento baja sus partidas la primera vez que se entra; Perfiles solo con el botón "Cargar perfiles"."""
+        if self.tabs.get() == "Rendimiento" and self.accounts:
+            self.perf_tab.ensure_loaded()
 
     # ── Perfiles ─────────────────────────────────────────────────────────────
     def _reload_profiles(self):

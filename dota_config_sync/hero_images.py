@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 PORTRAIT_URL = "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/{npc}.png"
 _IMAGES: dict[tuple[str, int, int], ctk.CTkImage] = {}
 _PHOTOS: dict[tuple[str, int, int], ImageTk.PhotoImage] = {}
+_PIL: dict[tuple[str, int, int], Image.Image] = {}       # retratos ya abiertos y escalados (hilo aparte)
 _BLANKS: dict[tuple[int, int], ctk.CTkImage] = {}
 
 
@@ -29,14 +30,20 @@ def blank_image(size: tuple[int, int] = (64, 36)) -> ctk.CTkImage:
 
 
 def _open_resized(npc: str, size: tuple[int, int]) -> Image.Image | None:
+    """PIL del retrato escalado, memoizada: abrir y escalar 127 PNG cuesta ~1 s, mejor fuera del hilo de Tk."""
+    key = (npc, *size)
+    if key in _PIL:
+        return _PIL[key]
     path = portrait_path(npc)
     if not path.exists():
         return None
     try:
-        return Image.open(path).convert("RGB").resize(size, Image.Resampling.LANCZOS)
+        img = Image.open(path).convert("RGB").resize(size, Image.Resampling.LANCZOS)
     except OSError as e:
         log.debug("Retrato %s ilegible: %s", npc, e)
         return None
+    _PIL[key] = img
+    return img
 
 
 def portrait_photo(npc: str, size: tuple[int, int] = (64, 36)) -> ImageTk.PhotoImage | None:
@@ -69,18 +76,23 @@ def download_portrait(npc: str) -> Path | None:
         return None
 
 
-def ensure_portraits(npcs: list[str], on_ready: Callable[[str], None] | None = None, workers: int = 4) -> None:
-    """Descarga los retratos que falten (en paralelo, sin limitador: es un CDN) y avisa por cada uno."""
-    pending = [n for n in npcs if n and not portrait_path(n).exists()]
-    if on_ready:
-        for n in npcs:
-            if n and n not in pending:
-                on_ready(n)
-    if not pending:
-        return
+def ensure_portraits(npcs: list[str], on_ready: Callable[[str], None] | None = None, workers: int = 4,
+                     size: tuple[int, int] | None = None) -> None:
+    """
+    Descarga los retratos que falten (en paralelo, sin limitador: es un CDN), los deja abiertos y
+    escalados a `size` si se pide, y avisa por cada uno. Pensado para un hilo de fondo.
+    """
+    def prepare(npc: str) -> bool:
+        if download_portrait(npc) is None:
+            return False
+        if size:
+            _open_resized(npc, size)
+        return True
+
+    valid = [n for n in npcs if n]
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        for npc, path in zip(pending, pool.map(download_portrait, pending), strict=True):
-            if path and on_ready:
+        for npc, ok in zip(valid, pool.map(prepare, valid), strict=True):
+            if ok and on_ready:
                 on_ready(npc)
 
 

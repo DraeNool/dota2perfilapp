@@ -1,4 +1,8 @@
-"""Pestaña Rendimiento: ranked recientes, MMR estimado, historial de medalla y tabla por héroe."""
+"""
+Pestaña Rendimiento: ranked recientes, MMR estimado, lectura, por posición y tabla por héroe contra el bracket.
+
+Carga recién al entrar a la pestaña (ensure_loaded), no al arrancar la app.
+"""
 
 import logging
 import threading
@@ -7,7 +11,7 @@ from datetime import datetime
 
 import customtkinter as ctk
 
-from . import opendota, performance, stratz
+from . import meta, opendota, performance, stratz
 from .theme import C, medal_for_tier
 from .widgets import TabContext, card, section_label
 
@@ -35,6 +39,13 @@ def _rate_color(rate: float | None) -> str:
     if rate is None:
         return C["txt2"]
     return C["green"] if rate >= 0.55 else C["red"] if rate < 0.45 else C["txt"]
+
+
+def _delta_color(mine: float, bench: float, higher_is_better: bool = True) -> str:
+    ratio = mine / bench if bench else 1.0
+    good = ratio >= 1.15 if higher_is_better else ratio <= 0.85
+    bad = ratio <= 0.85 if higher_is_better else ratio >= 1.15
+    return C["green"] if good else C["red"] if bad else C["txt2"]
 
 
 class PerformanceTab(ctk.CTkFrame):
@@ -106,7 +117,8 @@ class PerformanceTab(ctk.CTkFrame):
 
         hbox, hin = card(self.scroll)
         hbox.pack(fill="x", pady=(12, 16))
-        _text(hin, "HÉROES EN RANKED · ÚLTIMAS PARTIDAS", 10, C["txt3"], bold=True).pack(fill="x")
+        self.hero_title = _text(hin, "HÉROES EN RANKED · ÚLTIMAS PARTIDAS", 10, C["txt3"], bold=True)
+        self.hero_title.pack(fill="x")
         self.hero_table = ctk.CTkFrame(hin, fg_color="transparent")
         self.hero_table.pack(fill="x", pady=(6, 0))
 
@@ -122,11 +134,15 @@ class PerformanceTab(ctk.CTkFrame):
 
     # ── Datos ────────────────────────────────────────────────────────────────
     def set_accounts(self):
+        """Solo llena el combo: las partidas se bajan al entrar a la pestaña (ensure_loaded)."""
         accounts = self.ctx.accounts()
         names = [f"  {a['name']}" for a in accounts] or ["  (sin cuentas)"]
         self.acc_combo.configure(values=names)
         main = self.ctx.main_account()
         self.acc_combo.set(f"  {main['name']}" if main else names[0])
+        self.sync_status.configure(text="Se carga al entrar a esta pestaña.", text_color=C["txt3"])
+
+    def ensure_loaded(self):
         self._reload()
 
     def _selected_account(self) -> dict | None:
@@ -150,25 +166,23 @@ class PerformanceTab(ctk.CTkFrame):
         matches: list[dict] = []
         msg = ""
         if cfg.stratz_api_token:
-            # Stratz: posición jugada por partida, GPM/XPM/IMP. Si falla, OpenDota.
+            # Stratz: posición jugada por partida, GPM/XPM. Si falla, OpenDota.
             matches, tier, msg = stratz.fetch_player_matches(acc["steam_id3"], cfg.ranked_matches_limit,
                                                              cfg.stratz_api_token, ttl)
             rank_tier = rank_tier or tier
             if matches:
-                # Stratz no trae rango promedio del lobby ni tamaño de party: se completan desde OpenDota.
+                # Stratz no trae el rango promedio del lobby (ancla del MMR estimado): se completa desde OpenDota.
                 od, _ = performance.fetch_ranked_matches(acc["steam_id3"], cfg.ranked_matches_limit, ttl)
-                extra = {m.get("match_id"): m for m in od}
+                ranks = {m.get("match_id"): m.get("average_rank") for m in od}
                 for m in matches:
-                    src = extra.get(m["match_id"])
-                    if src:
-                        m["average_rank"] = m["average_rank"] or src.get("average_rank")
-                        m["party_size"] = src.get("party_size")
+                    m["average_rank"] = m["average_rank"] or ranks.get(m["match_id"])
         if not matches:
             matches, msg = performance.fetch_ranked_matches(acc["steam_id3"], cfg.ranked_matches_limit, ttl)
         if not rank_tier:
             rank_tier = opendota.fetch_profile(acc["steam_id3"], cfg.cache_ttl_seconds).get("rank_tier")
         history = performance.record_snapshot(acc["steam_id3"], rank_tier)
         summary = performance.summarize(matches)
+        performance.benchmark_heroes(summary["heroes"], meta.position_stats(cfg))   # misma caché que Picks
         series = performance.estimate_mmr_series(matches[:50])
         self.ctx.log(f"Rendimiento {acc['name']}: {msg}")
         self.after(0, self._render, acc, rank_tier, history, summary, series, msg)
@@ -180,7 +194,7 @@ class PerformanceTab(ctk.CTkFrame):
 
         label, color, stars = medal_for_tier(rank_tier)
         self.tiles["medal"][0].configure(text=f"{label}{' ★' * stars}", text_color=color)
-        self.tiles["medal"][1].configure(text=f"rank_tier {rank_tier or '?'} · OpenDota")
+        self.tiles["medal"][1].configure(text=f"rank_tier {rank_tier or '?'}")
 
         est = [e for _, e in series if e is not None]
         self.tiles["mmr"][0].configure(text=f"≈ {est[-1]:,}".replace(",", " ") if est else "N/D")
@@ -228,39 +242,51 @@ class PerformanceTab(ctk.CTkFrame):
             lbl, col, st = medal_for_tier(snap.get("rank_tier"))
             day = datetime.fromisoformat(snap["date"]).strftime("%d %b %Y")
             self._kv(day, f"{lbl}{' ★' * st}", col)
-        _text(self.side, "SOLO VS PARTY", 10, C["txt3"], bold=True).pack(fill="x", pady=(10, 0))
-        for name, (_sw, sg, sr) in (("Solo", summary["solo"]), ("Party", summary["party"])):
-            self._kv(f"{name} ({sg} pj)", _pct(sr), _rate_color(sr))
-        _text(self.side, "POR HORARIO", 10, C["txt3"], bold=True).pack(fill="x", pady=(10, 0))
-        for name, (_pw, pg, pr) in summary["periods"].items():
-            self._kv(f"{name.capitalize()} ({pg} pj)", _pct(pr), _rate_color(pr))
         positions = {p: v for p, v in (summary.get("positions") or {}).items() if v[1]}
+        _text(self.side, "POR POSICIÓN", 10, C["txt3"], bold=True).pack(fill="x", pady=(10, 0))
         if positions:
-            _text(self.side, "POR POSICIÓN (Stratz)", 10, C["txt3"], bold=True).pack(fill="x", pady=(10, 0))
             for pos, (_w, g, r) in sorted(positions.items(), key=lambda kv: -kv[1][1]):
                 self._kv(f"Pos {pos} ({g} pj)", _pct(r), _rate_color(r))
+        else:
+            _text(self.side, "Necesita token de Stratz (config.json).", 11, C["txt3"]).pack(fill="x")
 
         for wdg in self.hero_table.winfo_children():
             wdg.destroy()
         hero_map = self.ctx.hero_map()
-        with_gpm = any(h.get("gpm") for h in summary["heroes"])
-        heads = ("HÉROE", "PARTIDAS", "WINRATE", "KDA") + (("GPM", "XPM") if with_gpm else ()) + ("TENDENCIA",)
+        heroes = summary["heroes"][:MAX_HERO_ROWS]
+        with_pos = any(h.get("position") for h in heroes)
+        with_bench = any(h.get("bench") for h in heroes)
+        with_gpm = any(h.get("gpm") for h in heroes)
+        self.hero_title.configure(text="HÉROES EN RANKED · ÚLTIMAS PARTIDAS"
+                                  + (f" · KDA vs promedio {meta.BRACKET_LABEL} en tu posición" if with_bench else ""))
+        heads = (["HÉROE"] + (["POS"] if with_pos else []) + ["PARTIDAS", "WINRATE", "KDA"]
+                 + (["KDA BRACKET", "MUERTES / BRACKET"] if with_bench else []) + (["GPM"] if with_gpm else [])
+                 + ["TENDENCIA"])
         for c, h in enumerate(heads):
-            _text(self.hero_table, h, 10, C["txt3"], bold=True).grid(row=0, column=c, sticky="w", padx=(0, 18))
+            _text(self.hero_table, h, 10, C["txt3"], bold=True).grid(row=0, column=c, sticky="w", padx=(0, 16))
         self.hero_table.columnconfigure(0, weight=1)
-        for r, h in enumerate(summary["heroes"][:MAX_HERO_ROWS], 1):
-            cells = [
-                (hero_map.get(h["hero_id"], f"#{h['hero_id']}"), C["txt"]), (str(h["games"]), C["txt2"]),
-                (_pct(h["wr"]), _rate_color(h["wr"])), (f"{h['kda']:.1f}", C["txt2"]),
-            ]
+        for r, h in enumerate(heroes, 1):
+            cells = [(hero_map.get(h["hero_id"], f"#{h['hero_id']}"), C["txt"])]
+            if with_pos:
+                cells.append((str(h["position"]) if h.get("position") else "—", C["txt2"]))
+            cells += [(str(h["games"]), C["txt2"]), (_pct(h["wr"]), _rate_color(h["wr"]))]
+            bench = h.get("bench")
+            kda_color = _delta_color(h["kda"], bench["kda"]) if bench else C["txt2"]
+            cells.append((f"{h['kda']:.1f}", kda_color))
+            if with_bench:
+                if bench:
+                    cells += [(f"{bench['kda']:.1f}", C["txt2"]),
+                              (f"{h['deaths']:.1f} / {bench['deaths']:.1f}",
+                               _delta_color(h["deaths"], bench["deaths"], higher_is_better=False))]
+                else:
+                    cells += [("—", C["txt3"]), ("—", C["txt3"])]
             if with_gpm:
-                cells += [(f"{h['gpm']:.0f}" if h.get("gpm") else "—", C["txt2"]),
-                          (f"{h['xpm']:.0f}" if h.get("xpm") else "—", C["txt2"])]
+                cells.append((f"{h['gpm']:.0f}" if h.get("gpm") else "—", C["txt2"]))
             trend_color = C["green"] if h["trend"] == "↑" else C["red"] if h["trend"] == "↓" else C["txt2"]
             cells.append((h["trend"], trend_color))
             for c, (txt, col) in enumerate(cells):
-                _text(self.hero_table, txt, 12, col).grid(row=r, column=c, sticky="w", padx=(0, 18), pady=1)
-        if not summary["heroes"]:
+                _text(self.hero_table, txt, 12, col).grid(row=r, column=c, sticky="w", padx=(0, 16), pady=1)
+        if not heroes:
             _text(self.hero_table, "Sin partidas ranked visibles. ¿Activaste 'Exponer datos de partida' en Dota?",
                   11, C["txt3"]).grid(row=1, column=0, columnspan=5, sticky="w")
 

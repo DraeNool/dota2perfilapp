@@ -1,4 +1,9 @@
-"""Pestaña Picks: draft por slots (popup con grilla de retratos), first picks del meta y recomendaciones."""
+"""
+Pestaña Picks: draft por slots (popup con grilla de retratos), first picks del meta y recomendados.
+
+Tres bloques: el draft, los first picks del meta de tu posición y los recomendados con avisos.
+Todo sale de stats Divine/Immortal (Stratz; OpenDota sin token): nada del historial del jugador.
+"""
 
 import logging
 import threading
@@ -6,7 +11,7 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-from . import dota2protracker, hero_images, opendota, picks, stratz
+from . import draft, hero_images, meta, opendota
 from .theme import C
 from .widgets import TabContext, card, section_label
 
@@ -18,7 +23,7 @@ SIDES = ("Mi equipo", "Enemigos")
 ATTR_ORDER = (("str", "FUERZA"), ("agi", "AGILIDAD"), ("int", "INTELIGENCIA"), ("all", "UNIVERSAL"))
 TILE = (64, 36)
 TILE_W, TILE_H, GAP, HEADER_H, PAD = 64, 36, 6, 22, 8
-MAX_RECS, MAX_ALERTS, MAX_CHIPS, MAX_FIRST = 10, 6, 6, 5
+MAX_RECS, MAX_ALERTS, MAX_CHIPS, MAX_FIRST = 10, 6, 5, 5
 CHIP_COLORS = {
     "": (C["card"], C["txt2"]), "g": ("#10302a", C["green"]),
     "a": ("#3a2a10", C["amber"]), "r": ("#3a1a1f", C["red"]),
@@ -42,7 +47,7 @@ def _tier_badge(parent) -> ctk.CTkLabel:
                         width=40, height=26, padx=6)
 
 
-def _set_tier(badge: ctk.CTkLabel, score_lbl: ctk.CTkLabel, r: picks.Recommendation):
+def _set_tier(badge: ctk.CTkLabel, score_lbl: ctk.CTkLabel, r: draft.Recommendation):
     bg, fg = TIER_COLORS.get(r.tier, TIER_COLORS["C"])
     badge.configure(text=r.tier or "—", fg_color=bg, text_color=fg)
     score_lbl.configure(text=f"{r.score:.0f}")
@@ -362,7 +367,7 @@ class RecRow(ctk.CTkFrame):
                     *self.chip_labels):
             wdg.bind("<Button-1>", lambda _e: on_click(self.hero_id))
 
-    def update_rec(self, rank: int, r: picks.Recommendation, image: ctk.CTkImage | None):
+    def update_rec(self, rank: int, r: draft.Recommendation, image: ctk.CTkImage | None):
         self.hero_id = r.hero_id
         self.rank.configure(text=str(rank))
         self.pic.configure(image=image or hero_images.blank_image(TILE), text="" if image else r.name[:2].upper())
@@ -373,7 +378,7 @@ class RecRow(ctk.CTkFrame):
 
 
 class FirstPickTile(ctk.CTkFrame):
-    """Tarjeta compacta de un first pick del meta: retrato, nombre, score y dos chips. Click lo agrega."""
+    """Tarjeta compacta de un first pick del meta: retrato, nombre, tier y un chip. Click lo agrega."""
 
     def __init__(self, master, on_click, **kw):
         super().__init__(master, fg_color=C["card"], corner_radius=10, cursor="hand2", **kw)
@@ -390,46 +395,37 @@ class FirstPickTile(ctk.CTkFrame):
         self.score.pack(side="left", padx=(6, 0))
         self.chips = ctk.CTkFrame(self, fg_color="transparent")
         self.chips.pack(pady=(4, 10))
-        self.chip_labels = [_chip(self.chips) for _ in range(2)]
+        self.chip_labels = [_chip(self.chips) for _ in range(1)]
         for wdg in (self, self.pic, self.name, badge_row, self.tier, self.score, self.chips, *self.chip_labels):
             wdg.bind("<Button-1>", lambda _e: on_click(self.hero_id))
 
-    def update_rec(self, r: picks.Recommendation, image: ctk.CTkImage | None,
-                   prefer: tuple[str, ...] = ("First pick", "D2PT", "Vos")):
+    def update_rec(self, r: draft.Recommendation, image: ctk.CTkImage | None):
         self.hero_id = r.hero_id
         self.pic.configure(image=image or hero_images.blank_image(TILE), text="" if image else r.name[:2].upper())
         self.name.configure(text=r.name)
         _set_tier(self.tier, self.score, r)
-        compact = []
-        for key in prefer:                                   # en el orden de preferencia pedido
-            for text, tone in r.chips:
-                if key not in text:
-                    continue
-                if text.startswith("First pick: pocos"):
-                    compact.append(("sin muestra", tone))
-                elif text.startswith("First pick:"):
-                    compact.append((text.split(":")[1].split("del")[0].strip() + " countereable", tone))
-                else:
-                    compact.append((text, tone))
-        _set_chips(self.chip_labels, compact[:1] or r.chips[:1])   # la tarjeta es angosta: un chip
+        compact: list[tuple[str, str]] = []
+        for text, tone in r.chips:                              # la tarjeta es angosta: un chip, el de first pick
+            if text.startswith("First pick: pocos"):
+                compact.append(("sin muestra", tone))
+            elif text.startswith("First pick:"):
+                compact.append((text.split(":")[1].split("del")[0].strip() + " countereable", tone))
+        _set_chips(self.chip_labels, compact[:1] or r.chips[:1])
 
 
 class PicksTab(ctk.CTkFrame):
     def __init__(self, master, ctx: TabContext, **kw):
         super().__init__(master, fg_color="transparent", **kw)
         self.ctx = ctx
-        self.data = picks.PickData()
+        self.data = draft.DraftData()
         self.catalog: dict[int, dict] = {}
         self.photos: dict[int, tk.PhotoImage] = {}
         self.slots: dict[str, list[Slot]] = {}
         self._last_recs: list[int] = []
-        self._patch: str | None = None
-        self._loaded_static = False
-        self._personal_for: str | None = None
-        self._matchups_in_flight: set[int] = set()
+        self._tables_in_flight: set[int] = set()
         self._pending_recompute: str | None = None
         self._build()
-        threading.Thread(target=self._load_static, daemon=True).start()
+        threading.Thread(target=self._load_meta, daemon=True).start()
 
     # ── UI ───────────────────────────────────────────────────────────────────
     def _build(self):
@@ -442,40 +438,37 @@ class PicksTab(ctk.CTkFrame):
         section_label(self.scroll, "DRAFT", pady=(4, 6))
         box, top = card(self.scroll, C["accent2"])
         box.pack(fill="x")
-        top.columnconfigure(5, weight=1)
-        _text(top, "Mi cuenta").grid(row=0, column=0, padx=(0, 8))
-        self.acc_combo = _combo(top, ["  (cargando...)"], 200, lambda _v: self._on_account_change())
-        self.acc_combo.grid(row=0, column=1, padx=(0, 14))
-        _text(top, "Mi posición").grid(row=0, column=2, padx=(0, 8))
+        top.columnconfigure(3, weight=1)
+        _text(top, "Mi posición").grid(row=0, column=0, padx=(0, 8))
         self.pos_combo = _combo(top, POS_LABELS, 96, lambda _v: self._schedule_recompute())
         self.pos_combo.set("Pos 3")
-        self.pos_combo.grid(row=0, column=3, padx=(0, 14))
+        self.pos_combo.grid(row=0, column=1, padx=(0, 14))
         self.pos_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             top, text="Posiciones de los picks", variable=self.pos_var, command=self._toggle_positions,
             font=ctk.CTkFont(size=12), text_color=C["txt2"], fg_color=C["accent2"], hover_color=C["accent3"],
             border_color=C["border"], checkbox_width=18, checkbox_height=18,
-        ).grid(row=0, column=4, padx=(0, 14))
+        ).grid(row=0, column=2, padx=(0, 14))
+        self.data_status = _text(top, "Cargando meta...", 11, C["txt3"], anchor="e")
+        self.data_status.grid(row=0, column=3, sticky="e", padx=(0, 12))
         ctk.CTkButton(
-            top, text="Limpiar draft", width=110, height=28, fg_color="transparent", border_width=1,
+            top, text="Limpiar", width=90, height=28, fg_color="transparent", border_width=1,
             border_color=C["border"], text_color=C["txt2"], hover_color=C["bg2"], font=ctk.CTkFont(size=12),
             command=self._clear_draft,
-        ).grid(row=0, column=6, sticky="e")
-        self.data_status = _text(top, "Cargando meta...", 11, C["txt3"])
-        self.data_status.grid(row=1, column=0, columnspan=7, sticky="w", pady=(8, 0))
+        ).grid(row=0, column=4, sticky="e")
 
-        teams = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        teams.pack(fill="x", pady=(12, 0))
+        teams = ctk.CTkFrame(top, fg_color="transparent")
+        teams.grid(row=1, column=0, columnspan=5, sticky="ew", pady=(12, 0))
         teams.columnconfigure((0, 1), weight=1, uniform="team")
-        self._team_column(teams, 0, SIDES[0], C["accent"], C["accent2"])
-        self._team_column(teams, 1, SIDES[1], C["red"], ENEMY_RED)
+        self._team_column(teams, 0, SIDES[0], C["accent"])
+        self._team_column(teams, 1, SIDES[1], C["red"])
 
+        section_label(self.scroll, "FIRST PICKS DEL META", pady=(14, 6))
         fbox, fin = card(self.scroll, C["dst"])
-        fbox.pack(fill="x", pady=(12, 0))
-        self.first_title = _text(fin, "MEJORES FIRST PICKS DEL META", 10, C["dst"], bold=True)
+        fbox.pack(fill="x")
+        self.first_title = _text(fin, "Héroes del meta de tu posición que menos se counterean · click agrega",
+                                 11, C["txt2"])
         self.first_title.pack(fill="x")
-        _text(fin, "Héroes del meta de tu posición que menos se counterean. Click para agregarlo a tu equipo.",
-              11, C["txt2"]).pack(fill="x")
         strip = ctk.CTkFrame(fin, fg_color="transparent")
         strip.pack(fill="x", pady=(8, 0))
         strip.columnconfigure(tuple(range(MAX_FIRST)), weight=1, uniform="fp")
@@ -484,39 +477,23 @@ class PicksTab(ctk.CTkFrame):
             tile = FirstPickTile(strip, on_click=lambda h: self._add(h, SIDES[0]))
             tile.grid(row=0, column=i, sticky="nsew", padx=(0, 8) if i < MAX_FIRST - 1 else 0)
             self.first_tiles.append(tile)
-        self.first_empty = _text(fin, "Elegí tu posición para ver los first picks del meta.", 11, C["txt3"])
+        self.first_empty = _text(fin, "Cargando el meta de tu posición...", 11, C["txt3"])
 
-        mbox, min_ = card(self.scroll, C["accent"])
-        mbox.pack(fill="x", pady=(12, 0))
-        self.mine_title = _text(min_, "TUS HÉROES EN ESTE DRAFT", 10, C["accent"], bold=True)
-        self.mine_title.pack(fill="x")
-        _text(min_, "Tus habituales puntuados contra lo que sacaron: tier en este draft y % vs enemigos. "
-                    "Click para agregarlo.", 11, C["txt2"]).pack(fill="x")
-        mstrip = ctk.CTkFrame(min_, fg_color="transparent")
-        mstrip.pack(fill="x", pady=(8, 0))
-        mstrip.columnconfigure(tuple(range(MAX_FIRST)), weight=1, uniform="mine")
-        self.mine_tiles = []
-        for i in range(MAX_FIRST):
-            tile = FirstPickTile(mstrip, on_click=lambda h: self._add(h, SIDES[0]))
-            tile.grid(row=0, column=i, sticky="nsew", padx=(0, 8) if i < MAX_FIRST - 1 else 0)
-            self.mine_tiles.append(tile)
-        self.mine_empty = _text(min_, "Cargando tu historial de héroes...", 11, C["txt3"])
-
+        self.rec_section = section_label(self.scroll, "RECOMENDADOS", pady=(14, 6))
         results = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        results.pack(fill="x", pady=(12, 16))
+        results.pack(fill="x", pady=(0, 16))
         results.columnconfigure(0, weight=3, uniform="res")
         results.columnconfigure(1, weight=2, uniform="res")
         rbox, rin = card(results)
         rbox.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        self.rec_title = _text(rin, "RECOMENDADOS", 10, C["txt3"], bold=True)
+        self.rec_title = _text(rin, "click en una fila para agregarlo a tu equipo", 11, C["txt2"])
         self.rec_title.pack(fill="x")
-        _text(rin, "click en una fila para agregarlo a tu equipo", 10, C["txt3"]).pack(fill="x")
         rec_list = ctk.CTkFrame(rin, fg_color="transparent")
         rec_list.pack(fill="x", pady=(6, 0))
         self.rec_rows = [RecRow(rec_list, on_click=lambda h: self._add(h, SIDES[0])) for _ in range(MAX_RECS)]
         abox, ain = card(results)
         abox.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
-        _text(ain, "AVISOS DEL DRAFT", 10, C["txt3"], bold=True).pack(fill="x")
+        _text(ain, "AVISOS", 10, C["txt3"], bold=True).pack(fill="x")
         alert_list = ctk.CTkFrame(ain, fg_color="transparent")
         alert_list.pack(fill="x", pady=(6, 0))
         self.alert_rows = []
@@ -527,19 +504,17 @@ class PicksTab(ctk.CTkFrame):
             self.alert_rows.append((row, lbl))
         self.alert_empty = _text(alert_list, "Cargá picks enemigos para ver avisos.", 11, C["txt3"])
         self.alert_empty.pack(fill="x")
-        w = picks.normalize_weights(self.ctx.cfg.picks_weights, picks.DEFAULT_WEIGHTS)
-        f = picks.normalize_weights(self.ctx.cfg.first_pick_weights, picks.FIRST_PICK_WEIGHTS)
-        weights = (f"Con enemigos: counters {w['counters']:.0%} · meta {w['meta']:.0%} · "
-                   f"posición {w['position']:.0%} · tus héroes {w['personal']:.0%}.\n"
-                   f"First pick: meta {f['meta']:.0%} · seguridad {f['counters']:.0%} · "
-                   f"posición {f['position']:.0%} · tus héroes {f['personal']:.0%}.\n"
-                   "Editables en config.json (picks_weights / first_pick_weights).")
+        w = draft.normalize_weights(self.ctx.cfg.picks_weights, draft.DEFAULT_WEIGHTS)
+        f = draft.normalize_weights(self.ctx.cfg.first_pick_weights, draft.FIRST_PICK_WEIGHTS)
+        weights = (f"Pesos · con enemigos: counters {w['counters']:.0%}, meta {w['meta']:.0%}, "
+                   f"sinergia {w['synergy']:.0%} · first pick: meta {f['meta']:.0%}, seguridad {f['safety']:.0%}, "
+                   f"sinergia {f['synergy']:.0%} (config.json).")
         _text(ain, weights, 10, C["txt3"], wraplength=300, justify="left").pack(fill="x", pady=(10, 0))
 
-    def _team_column(self, parent, col: int, side: str, color: str, border: str):
-        box, inner = card(parent, border)
-        box.grid(row=0, column=col, sticky="nsew", padx=(0, 6) if col == 0 else (6, 0))
-        _text(inner, f"● {side.upper()}", 10, color, bold=True).pack(fill="x", pady=(0, 6))
+    def _team_column(self, parent, col: int, side: str, color: str):
+        inner = ctk.CTkFrame(parent, fg_color="transparent")
+        inner.grid(row=0, column=col, sticky="nsew", padx=(0, 6) if col == 0 else (6, 0))
+        _text(inner, f"● {side.upper()}", 10, color, bold=True).pack(fill="x", pady=(0, 4))
         slots = []
         for i in range(5):
             slot = Slot(inner, on_remove=lambda s=side, i=i: self._remove(s, i), on_change=self._schedule_recompute,
@@ -549,6 +524,7 @@ class PicksTab(ctk.CTkFrame):
         self.slots[side] = slots
 
     def _install_catalog(self):
+        """Retratos: descarga y escalado en un hilo; la PhotoImage (hilo de Tk) se crea al avisar."""
         npc_to_id = {info["npc"]: hid for hid, info in self.catalog.items()}
 
         def ready(npc: str):
@@ -559,7 +535,8 @@ class PicksTab(ctk.CTkFrame):
 
         threading.Thread(
             target=hero_images.ensure_portraits,
-            args=([info["npc"] for info in self.catalog.values()], lambda n: self.after(0, ready, n)), daemon=True,
+            args=([info["npc"] for info in self.catalog.values()], lambda n: self.after(0, ready, n)),
+            kwargs={"size": TILE}, daemon=True,
         ).start()
 
     # ── Draft ────────────────────────────────────────────────────────────────
@@ -614,7 +591,7 @@ class PicksTab(ctk.CTkFrame):
                 s.show_pos(show)
         self._schedule_recompute()
 
-    def _state(self) -> picks.DraftState:
+    def _state(self) -> draft.DraftState:
         pos_txt = self.pos_combo.get()
         my_pos = POS_LABELS.index(pos_txt) + 1 if pos_txt in POS_LABELS else None
         allies = [s.hero_id for s in self.slots[SIDES[0]] if s.hero_id is not None]
@@ -625,93 +602,35 @@ class PicksTab(ctk.CTkFrame):
                 pos = s.pos_value()
                 if s.hero_id is not None and pos:
                     enemy_pos[s.hero_id] = pos
-        return picks.DraftState(my_pos=my_pos, allies=allies, enemies=enemies, enemy_pos=enemy_pos)
+        return draft.DraftState(my_pos=my_pos, allies=allies, enemies=enemies, enemy_pos=enemy_pos)
 
-    # ── Cuentas y datos ──────────────────────────────────────────────────────
-    def set_accounts(self):
-        accounts = self.ctx.accounts()
-        names = [f"  {a['name']}" for a in accounts] or ["  (sin cuentas)"]
-        self.acc_combo.configure(values=names)
-        main = self.ctx.main_account()
-        self.acc_combo.set(f"  {main['name']}" if main else names[0])
-        self._on_account_change()
-
-    def _selected_account(self) -> dict | None:
-        name = self.acc_combo.get().strip()
-        return next((a for a in self.ctx.accounts() if a["name"] == name), None)
-
-    def _on_account_change(self):
-        acc = self._selected_account()
-        if not acc or acc["steam_id3"] == self._personal_for:
-            return
-        self._personal_for = acc["steam_id3"]
-        self.data.bracket = picks.bracket_from_rank_tier(acc.get("rank_tier"))
-        threading.Thread(target=self._load_personal, args=(acc,), daemon=True).start()
-
-    def _load_personal(self, acc: dict):
-        ttl = self.ctx.cfg.cache_ttl_seconds
-        rows = picks.fetch_player_heroes(acc["steam_id3"], ttl)
-        if self.data.bracket is None:
-            profile = opendota.fetch_profile(acc["steam_id3"], ttl)
-            self.data.bracket = picks.bracket_from_rank_tier(profile.get("rank_tier"))
-        self.data.player_heroes = rows
-        self.ctx.log(f"Picks: {len(rows)} héroes con historial para {acc['name']} "
-                     f"(bracket {self.data.bracket or '?'})")
-        self.after(0, self._schedule_recompute)
-
-    def _load_static(self):
-        cfg = self.ctx.cfg
-        hero_map = self.ctx.hero_map()
-        self.data.hero_names = dict(hero_map)
+    # ── Datos ────────────────────────────────────────────────────────────────
+    def _load_meta(self):
+        """Al arrancar: catálogo de héroes (24 h), meta Divine/Immortal (6 h) y ranking D2PT (1 h)."""
         self.catalog = opendota.get_hero_catalog()
         self.after(0, self._install_catalog)
-
-        self.data.hero_stats = picks.fetch_hero_stats(cfg.opendota_stats_ttl_seconds)
-        roles, patch, _ = dota2protracker.fetch_meta_roles(cfg.meta_grids_ttl_seconds)
-        self.data.roles = roles
-        grids, _ = dota2protracker.fetch_meta_hero_grids(cfg.meta_grids_ttl_seconds)
-        self.data.relations = picks.parse_d2pt_relations(grids)
-        self._patch = patch
-        self._loaded_static = True
-        self.ctx.log(f"Picks: meta {patch or '?'} listo · {len(self.data.hero_stats)} héroes con stats por bracket")
+        snap = meta.load_snapshot(self.ctx.cfg)
+        self.data.meta = snap
+        src = {"stratz": "Stratz", "opendota": "OpenDota (sin posición: falta token de Stratz)"}.get(snap.source, "?")
+        self.ctx.log(f"Picks: meta {snap.patch or '?'} · {len(snap.overall)} héroes {meta.BRACKET_LABEL} vía {src}")
         self.after(0, self._schedule_recompute)
-        self._load_position_stats()
-
-    def _load_position_stats(self):
-        """Stratz: cómo rinde cada héroe en cada posición de tu bracket (una consulta, caché 24 h)."""
-        token = self.ctx.cfg.stratz_api_token
-        if not token:
-            return
-        stats = stratz.fetch_position_stats(self.data.bracket, token, self.ctx.cfg.opendota_stats_ttl_seconds)
-        if stats:
-            self.data.position_stats = stats
-            self._stats_bracket = self.data.bracket
-            self.ctx.log(f"Picks: stats por posición de Stratz para {len(stats)} héroes "
-                         f"(bracket {picks.BRACKET_NAMES.get(self.data.bracket or 0, 'todos')})")
-            self.after(0, self._schedule_recompute)
 
     def _ensure_tables(self, heroes: list[int]):
-        """Baja (o lee de caché) la tabla de matchups de cada héroe nuevo; el recompute vuelve a correr al llegar."""
-        missing = [h for h in heroes if h not in self.data.matchups and h not in self._matchups_in_flight]
+        """Baja (o lee de caché) la tabla de cada héroe nuevo (una llamada por héroe); recompute al llegar."""
+        missing = [h for h in heroes if h not in self.data.matchups and h not in self._tables_in_flight]
         if not missing:
             return
-        self._matchups_in_flight.update(missing)
-
+        self._tables_in_flight.update(missing)
         cfg = self.ctx.cfg
-        token = cfg.stratz_api_token
 
         def worker():
             for h in missing:
                 # Una tabla vacía se guarda como {}: cuenta como "sin muestra" y no se reintenta en la sesión.
-                if token:
-                    # Stratz: matchups filtrados a TU bracket, más sinergia con cada aliado posible.
-                    vs, with_ = stratz.fetch_hero_matchups(h, self.data.bracket, token, cfg.opendota_stats_ttl_seconds)
-                    self.data.matchups[h] = vs or picks.fetch_matchups(h, cfg.opendota_stats_ttl_seconds)
-                    if with_:
-                        self.data.synergy[h] = with_
-                else:
-                    self.data.matchups[h] = picks.fetch_matchups(h, cfg.opendota_stats_ttl_seconds)
-                self._matchups_in_flight.discard(h)
+                vs, with_ = meta.fetch_tables(h, cfg)
+                self.data.matchups[h] = vs
+                if with_:
+                    self.data.synergy[h] = with_
+                self._tables_in_flight.discard(h)
                 self.after(0, self._schedule_recompute)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -724,32 +643,34 @@ class PicksTab(ctk.CTkFrame):
 
     def _recompute(self):
         self._pending_recompute = None
-        if not self.data.hero_names:
+        snap = self.data.meta
+        if not snap.ready:
             return
         state = self._state()
-        w_enemy = picks.normalize_weights(self.ctx.cfg.picks_weights, picks.DEFAULT_WEIGHTS)
-        w_first = picks.normalize_weights(self.ctx.cfg.first_pick_weights, picks.FIRST_PICK_WEIGHTS)
-        recs = picks.recommend(state, self.data, weights=w_enemy if state.enemies else w_first, limit=MAX_RECS)
-        firsts = picks.meta_first_picks(state, self.data, limit=MAX_FIRST, weights=w_first)
+        w_enemy = draft.normalize_weights(self.ctx.cfg.picks_weights, draft.DEFAULT_WEIGHTS)
+        w_first = draft.normalize_weights(self.ctx.cfg.first_pick_weights, draft.FIRST_PICK_WEIGHTS)
+        recs = draft.recommend(state, self.data, weights=w_enemy if state.enemies else w_first, limit=MAX_RECS)
+        firsts = draft.meta_first_picks(state, self.data, limit=MAX_FIRST, weights=w_first)
         self._last_recs = [r.hero_id for r in recs]
 
-        needed = list(state.enemies) if state.enemies else [r.hero_id for r in recs]
+        # Tablas: la de cada enemigo (counters), la de cada aliado (sinergia) y, sin enemigos,
+        # la propia de cada candidato (qué tan countereable es de first pick).
+        needed = list(state.enemies) + list(state.allies)
+        if not state.enemies:
+            needed += [r.hero_id for r in recs]
         needed += [r.hero_id for r in firsts]
-        if self.ctx.cfg.stratz_api_token:
-            needed += list(state.allies)   # su tabla "with" da la sinergia real con cada candidato
         self._ensure_tables(needed)
         known = sum(1 for h in needed if h in self.data.matchups)
-        tables = (f"counters {known}/{len(needed)} tablas" if state.enemies
-                  else f"first pick: tablas {known}/{len(needed)}")
-        pending = (not self._loaded_static) or known < len(needed)
-        bracket = picks.BRACKET_NAMES.get(self.data.bracket or 0, "?")
-        meta_txt = f"Parche {self._patch or '?'}" if self._loaded_static else "Cargando meta..."
-        self.data_status.configure(text=f"{meta_txt} · {tables} · bracket {bracket}",
-                                   text_color=C["amber"] if pending else C["txt3"])
+        pending = known < len(needed)
+        src = "Stratz" if snap.source == "stratz" else "OpenDota"
+        status = f"Parche {snap.patch or '?'} · {meta.BRACKET_LABEL} · {src}"
+        if pending:
+            status += f" · tablas {known}/{len(needed)}"
+        self.data_status.configure(text=status, text_color=C["amber"] if pending else C["txt3"])
 
-        pos_txt = POS_LABELS[state.my_pos - 1].upper() if state.my_pos else ""
-        self.first_title.configure(text=f"MEJORES FIRST PICKS DEL META · {pos_txt}" if pos_txt
-                                   else "MEJORES FIRST PICKS DEL META")
+        pos_txt = POS_LABELS[state.my_pos - 1] if state.my_pos else ""
+        self.first_title.configure(text=f"Meta de {pos_txt.lower()} ordenado por lo poco que se counterea · "
+                                        "click agrega a tu equipo")
         for i, tile in enumerate(self.first_tiles):
             if i < len(firsts):
                 r = firsts[i]
@@ -762,28 +683,14 @@ class PicksTab(ctk.CTkFrame):
         else:
             self.first_empty.pack(fill="x", pady=(6, 0))
 
-        mine = picks.my_heroes_in_draft(state, self.data, limit=MAX_FIRST,
-                                        weights=w_enemy if state.enemies else w_first)
-        prefer = ("vs enemigos", "Vos", "D2PT") if state.enemies else ("First pick", "Vos", "D2PT")
-        for i, tile in enumerate(self.mine_tiles):
-            if i < len(mine):
-                r = mine[i]
-                tile.update_rec(r, hero_images.portrait_image(self.catalog.get(r.hero_id, {}).get("npc", ""), TILE),
-                                prefer=prefer)
-                tile.grid()
-            else:
-                tile.grid_remove()
-        if mine:
-            self.mine_empty.pack_forget()
-        else:
-            self.mine_empty.configure(text="Sin historial de héroes con muestra para esta cuenta."
-                                      if self.data.player_heroes else "Cargando tu historial de héroes...")
-            self.mine_empty.pack(fill="x", pady=(6, 0))
-
         if state.enemies:
-            self.rec_title.configure(text=f"RECOMENDADOS PARA {pos_txt} · {len(state.enemies)} enemigo(s)")
+            self.rec_section.configure(text=f"RECOMENDADOS PARA {pos_txt.upper()} · {len(state.enemies)} ENEMIGO(S)")
+            self.rec_title.configure(text="Counters a lo que sacaron, meta de tu posición y sinergia con tu equipo · "
+                                          "click agrega")
         else:
-            self.rec_title.configure(text=f"RECOMENDADOS PARA {pos_txt} · first pick (sin enemigos a la vista)")
+            self.rec_section.configure(text=f"RECOMENDADOS PARA {pos_txt.upper()} · FIRST PICK")
+            self.rec_title.configure(text="Sin enemigos a la vista: meta de tu posición y seguridad ante counters · "
+                                          "click agrega")
         for i, row in enumerate(self.rec_rows):
             if i < len(recs):
                 r = recs[i]
@@ -793,7 +700,7 @@ class PicksTab(ctk.CTkFrame):
             else:
                 row.pack_forget()
 
-        alerts = picks.draft_alerts(state, self.data, limit=MAX_ALERTS, recs=recs)
+        alerts = draft.draft_alerts(state, self.data, limit=MAX_ALERTS, recs=recs)
         if alerts:
             self.alert_empty.pack_forget()
         else:
