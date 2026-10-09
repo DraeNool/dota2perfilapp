@@ -339,9 +339,10 @@ def has_enough_sample(r: Recommendation, state: DraftState, data: DraftData,
     """
     if not plays_position(r.hero_id, state.my_pos, data.meta, totals):
         return False
+    # Una tabla vacía es "no se pudo bajar", no "sin muestra": no esconde a nadie.
     if not state.enemies:
-        return r.hero_id not in data.matchups or counter_exposure(r.hero_id, data) is not None
-    if all(e in data.matchups for e in state.enemies):
+        return not data.matchups.get(r.hero_id) or counter_exposure(r.hero_id, data) is not None
+    if all(data.matchups.get(e) for e in state.enemies):
         return r.parts.get("known_enemies", 0) > 0
     return True
 

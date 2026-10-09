@@ -116,10 +116,15 @@ def load_snapshot(cfg) -> MetaSnapshot:
 
 
 def fetch_tables(hero_id: int, cfg) -> tuple[dict[int, tuple[int, int]], dict[int, tuple[int, int]]]:
-    """(vs, with) del héroe: Stratz en el bracket con token; sin token, OpenDota (solo vs)."""
+    """
+    (vs, with) del héroe. Con token: Stratz en el bracket; si llega vacío (respuesta rara cacheada o
+    fallo transitorio) se reintenta una vez sin caché. Sin token: OpenDota (todos los brackets, solo vs).
+    Con token no se cae a OpenDota: su tabla no distingue bracket y hoy puede tardar un minuto por héroe.
+    """
     ttl = cfg.opendota_stats_ttl_seconds
     if cfg.stratz_api_token:
         vs, with_ = stratz.fetch_hero_matchups(hero_id, BRACKET, cfg.stratz_api_token, ttl)
-        if vs:
-            return vs, with_
+        if not vs:
+            vs, with_ = stratz.fetch_hero_matchups(hero_id, BRACKET, cfg.stratz_api_token, 0)
+        return vs, with_
     return fetch_matchups_opendota(hero_id, ttl), {}

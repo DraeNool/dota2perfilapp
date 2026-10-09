@@ -5,6 +5,7 @@ Tres bloques: el draft, los first picks del meta de tu posición y los recomenda
 Todo sale de stats Divine/Immortal (Stratz; OpenDota sin token): nada del historial del jugador.
 """
 
+import concurrent.futures
 import logging
 import threading
 import tkinter as tk
@@ -24,6 +25,7 @@ ATTR_ORDER = (("str", "FUERZA"), ("agi", "AGILIDAD"), ("int", "INTELIGENCIA"), (
 TILE = (64, 36)
 TILE_W, TILE_H, GAP, HEADER_H, PAD = 64, 36, 6, 22, 8
 MAX_RECS, MAX_ALERTS, MAX_CHIPS, MAX_FIRST = 10, 6, 5, 5
+MAX_TABLE_TRIES = 3
 CHIP_COLORS = {
     "": (C["card"], C["txt2"]), "g": ("#10302a", C["green"]),
     "a": ("#3a2a10", C["amber"]), "r": ("#3a1a1f", C["red"]),
@@ -423,9 +425,12 @@ class PicksTab(ctk.CTkFrame):
         self.slots: dict[str, list[Slot]] = {}
         self._last_recs: list[int] = []
         self._tables_in_flight: set[int] = set()
+        self._table_tries: dict[int, int] = {}
         self._pending_recompute: str | None = None
         self._build()
-        threading.Thread(target=self._load_meta, daemon=True).start()
+        # El hilo arranca recién dentro del mainloop: un after() desde otro hilo antes de que el
+        # mainloop corra lanza "main thread is not in main loop" y mata el hilo en silencio.
+        self.after(0, lambda: threading.Thread(target=self._load_meta, name="picks-meta", daemon=True).start())
 
     # ── UI ───────────────────────────────────────────────────────────────────
     def _build(self):
@@ -607,33 +612,62 @@ class PicksTab(ctk.CTkFrame):
     # ── Datos ────────────────────────────────────────────────────────────────
     def _load_meta(self):
         """Al arrancar: catálogo de héroes (24 h), meta Divine/Immortal (6 h) y ranking D2PT (1 h)."""
-        self.catalog = opendota.get_hero_catalog()
-        self.after(0, self._install_catalog)
-        snap = meta.load_snapshot(self.ctx.cfg)
+        try:
+            self.catalog = opendota.get_hero_catalog()
+            self.after(0, self._install_catalog)
+            snap = meta.load_snapshot(self.ctx.cfg)
+        except Exception as e:  # noqa: BLE001 — se muestra en la pestaña en vez de morir en silencio
+            log.exception("Picks: no se pudo cargar el meta")
+            self.ctx.log(f"Picks: no se pudo cargar el meta: {e}")
+            self.after(0, self._set_status, f"No se pudo cargar el meta: {e}", C["red"])
+            return
         self.data.meta = snap
+        if not snap.ready:
+            why = "sin token de Stratz y OpenDota no respondió" if not snap.overall else "sin nombres de héroes"
+            self.ctx.log(f"Picks: meta incompleto ({why})")
+            self.after(0, self._set_status, f"Meta incompleto: {why}", C["red"])
+            return
         src = {"stratz": "Stratz", "opendota": "OpenDota (sin posición: falta token de Stratz)"}.get(snap.source, "?")
         self.ctx.log(f"Picks: meta {snap.patch or '?'} · {len(snap.overall)} héroes {meta.BRACKET_LABEL} vía {src}")
         self.after(0, self._schedule_recompute)
 
+    def _set_status(self, text: str, color: str):
+        self.data_status.configure(text=text, text_color=color)
+
     def _ensure_tables(self, heroes: list[int]):
-        """Baja (o lee de caché) la tabla de cada héroe nuevo (una llamada por héroe); recompute al llegar."""
-        missing = [h for h in heroes if h not in self.data.matchups and h not in self._tables_in_flight]
+        """
+        Baja (o lee de caché) la tabla de cada héroe nuevo, hasta 4 en paralelo; recompute al llegar cada una.
+        Una tabla que llega vacía no se guarda: se reintenta en el próximo recompute (hasta MAX_TABLE_TRIES).
+        """
+        missing = [h for h in dict.fromkeys(heroes)
+                   if h not in self.data.matchups and h not in self._tables_in_flight
+                   and self._table_tries.get(h, 0) < MAX_TABLE_TRIES]
         if not missing:
             return
         self._tables_in_flight.update(missing)
         cfg = self.ctx.cfg
 
-        def worker():
-            for h in missing:
-                # Una tabla vacía se guarda como {}: cuenta como "sin muestra" y no se reintenta en la sesión.
+        def one(h: int):
+            try:
                 vs, with_ = meta.fetch_tables(h, cfg)
+            except Exception:  # noqa: BLE001 — una tabla fallida no debe tumbar las demás
+                log.exception("Picks: tabla de %s falló", h)
+                vs, with_ = {}, {}
+            self._table_tries[h] = self._table_tries.get(h, 0) + 1
+            if vs:
                 self.data.matchups[h] = vs
-                if with_:
-                    self.data.synergy[h] = with_
-                self._tables_in_flight.discard(h)
-                self.after(0, self._schedule_recompute)
+            else:
+                self.ctx.log(f"Picks: sin tabla de matchups para {self.data.name(h)} (intento {self._table_tries[h]})")
+            if with_:
+                self.data.synergy[h] = with_
+            self._tables_in_flight.discard(h)
+            self.after(0, self._schedule_recompute)
 
-        threading.Thread(target=worker, daemon=True).start()
+        def worker():
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(one, missing))
+
+        threading.Thread(target=worker, name="picks-tables", daemon=True).start()
 
     # ── Recompute ────────────────────────────────────────────────────────────
     def _schedule_recompute(self):
@@ -660,13 +694,19 @@ class PicksTab(ctk.CTkFrame):
             needed += [r.hero_id for r in recs]
         needed += [r.hero_id for r in firsts]
         self._ensure_tables(needed)
+        needed = list(dict.fromkeys(needed))
         known = sum(1 for h in needed if h in self.data.matchups)
-        pending = known < len(needed)
+        failed = sum(1 for h in needed if h not in self.data.matchups
+                     and self._table_tries.get(h, 0) >= MAX_TABLE_TRIES)
+        pending = known + failed < len(needed)
         src = "Stratz" if snap.source == "stratz" else "OpenDota"
         status = f"Parche {snap.patch or '?'} · {meta.BRACKET_LABEL} · {src}"
         if pending:
             status += f" · tablas {known}/{len(needed)}"
-        self.data_status.configure(text=status, text_color=C["amber"] if pending else C["txt3"])
+        elif failed:
+            status += f" · {failed} tabla(s) sin respuesta"
+        color = C["amber"] if pending else C["red"] if failed else C["txt3"]
+        self.data_status.configure(text=status, text_color=color)
 
         pos_txt = POS_LABELS[state.my_pos - 1] if state.my_pos else ""
         self.first_title.configure(text=f"Meta de {pos_txt.lower()} ordenado por lo poco que se counterea · "

@@ -138,6 +138,30 @@ def test_heroes_without_sample_are_hidden():
     data.matchups = {55: {1: (1000, 400)}}                        # first pick: tabla propia sin cobertura
     assert 55 not in [r.hero_id for r in draft.recommend(draft.DraftState(my_pos=3), data)]
     assert 2 in [r.hero_id for r in draft.recommend(draft.DraftState(my_pos=3), data)]
+    data.matchups = {12: {}, 55: {}}                              # tablas vacías = no se pudieron bajar
+    assert 3 in [r.hero_id for r in draft.recommend(draft.DraftState(my_pos=3, enemies=[12]), data)]
+    assert 55 in [r.hero_id for r in draft.recommend(draft.DraftState(my_pos=3), data)]
+
+
+def test_fetch_tables_retries_stratz_without_cache_and_skips_opendota(monkeypatch):
+    calls = []
+
+    def fake(hero_id, bracket, token, ttl):
+        calls.append(ttl)
+        return ({2: (100, 50)}, {}) if ttl == 0 else ({}, {})
+
+    monkeypatch.setattr(meta.stratz, "fetch_hero_matchups", fake)
+    monkeypatch.setattr(meta, "fetch_matchups_opendota", lambda *_a: (_ for _ in ()).throw(AssertionError("OpenDota")))
+
+    class Cfg:
+        stratz_api_token = "t"
+        opendota_stats_ttl_seconds = 86400
+
+    assert meta.fetch_tables(12, Cfg()) == ({2: (100, 50)}, {})
+    assert calls == [86400, 0]                                    # caché primero, luego sin caché
+    Cfg.stratz_api_token = ""
+    monkeypatch.setattr(meta, "fetch_matchups_opendota", lambda h, ttl: {h: (1, 1)})
+    assert meta.fetch_tables(12, Cfg()) == ({12: (1, 1)}, {})
 
 
 def test_meta_first_picks_only_pool_heroes_minus_taken_sorted():

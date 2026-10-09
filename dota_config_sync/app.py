@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -12,7 +13,7 @@ import customtkinter as ctk
 
 from . import __version__, autoexec, dota2protracker, fileops, hero_grid, http, opendota, steam
 from .config import AppConfig
-from .paths import resource_path
+from .paths import app_base_dir, resource_path
 from .theme import C, download_avatar
 from .ui_performance import PerformanceTab
 from .ui_picks import PicksTab
@@ -451,7 +452,9 @@ class App(ctk.CTk):
     # ── Detección de Steam ───────────────────────────────────────────────────
     def _detect_steam(self):
         self.status.set("Buscando instalación de Steam...", "loading")
-        threading.Thread(target=self._detect_thread, daemon=True).start()
+        # El hilo arranca recién dentro del mainloop: un after() desde otro hilo antes de que el
+        # mainloop corra lanza "main thread is not in main loop" y mata el hilo en silencio.
+        self.after(0, lambda: threading.Thread(target=self._detect_thread, daemon=True).start())
 
     def _detect_thread(self):
         path = steam.find_steam_path()
@@ -969,6 +972,10 @@ class App(ctk.CTk):
 
     def on_close(self):
         self.destroy()
+        # Los pools de hilos (perfiles, retratos) se esperan al salir: con OpenDota colgado el proceso
+        # quedaba vivo sin ventana. Nada queda a medio escribir fuera de la caché.
+        logging.shutdown()
+        os._exit(0)
 
 
 def _set_app_user_model_id():
@@ -981,8 +988,27 @@ def _set_app_user_model_id():
         log.debug("No se pudo fijar AppUserModelID: %s", e)
 
 
+def _setup_logging():
+    """Consola (si hay) más app.log junto al exe: sin consola, los errores de los hilos no se ven en ningún lado."""
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    logging.basicConfig(level=logging.INFO, format=fmt)
+    try:
+        handler = RotatingFileHandler(app_base_dir() / "app.log", maxBytes=512_000, backupCount=1, encoding="utf-8")
+        handler.setFormatter(logging.Formatter(fmt))
+        handler.setLevel(logging.INFO)
+        logging.getLogger().addHandler(handler)
+    except OSError as e:
+        log.warning("Sin app.log: %s", e)
+
+    def thread_hook(args):
+        log.error("Hilo %s murió", getattr(args.thread, "name", "?"),
+                  exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    threading.excepthook = thread_hook
+
+
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    _setup_logging()
     _set_app_user_model_id()
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
@@ -993,4 +1019,5 @@ def main():
 
     app = App(cfg)
     app.protocol("WM_DELETE_WINDOW", app.on_close)
+    app.report_callback_exception = lambda et, ev, tb: log.error("Error en callback de Tk", exc_info=(et, ev, tb))
     app.mainloop()
