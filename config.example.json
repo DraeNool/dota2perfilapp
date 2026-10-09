@@ -1,5 +1,6 @@
 {
   "steam_api_key": "",
+  "stratz_api_token": "",
   "preferred_main_id64": "76561198000000000",
   "favorites_limit": 15,
   "recent_matches_limit": 20,

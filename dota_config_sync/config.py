@@ -41,6 +41,7 @@ DEFAULT_META_META: dict[str, Any] = {
 
 DEFAULTS = {
     "steam_api_key": "",
+    "stratz_api_token": "",            # también STRATZ_API_TOKEN en el entorno (prioridad)
     "preferred_main_id64": "76561198128824716",
     "favorites_limit": 15,
     "recent_matches_limit": 20,
@@ -96,6 +97,10 @@ class AppConfig:
 
     def set_steam_api_key(self, key: str) -> None:
         self._data["steam_api_key"] = (key or "").strip()
+
+    @property
+    def stratz_api_token(self) -> str:
+        return os.environ.get("STRATZ_API_TOKEN") or str(self._data.get("stratz_api_token") or "")
 
     @property
     def preferred_main_id64(self) -> str:
