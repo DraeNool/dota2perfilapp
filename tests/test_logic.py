@@ -174,6 +174,18 @@ def test_import_profile_copies_into_profiles_dir(tmp_path, monkeypatch):
     assert dest in autoexec.list_profiles()
 
 
+def test_default_profiles_include_ardysa_and_fill_missing_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(autoexec, "app_base_dir", lambda: tmp_path)
+    d = tmp_path / "autoexec_profiles"
+    d.mkdir()
+    (d / "bajo.cfg").write_text("mio\n", encoding="utf-8")        # perfil editado por el usuario
+    names = {p.stem for p in autoexec.list_profiles()}
+    assert {"bajo", "medio", "alto", "ardysa"} <= names
+    assert (d / "bajo.cfg").read_text(encoding="utf-8") == "mio\n"   # no se pisa
+    ardysa = (d / "ardysa.cfg").read_text(encoding="utf-8")
+    assert ardysa.startswith("// DOTA 2 AUTOEXEC.CFG") and "fps_max 0\n" in ardysa and "cl_smooth 1\n" in ardysa
+
+
 def test_installed_autoexec_requires_file(tmp_path):
     cfg = _make_dota_install(tmp_path)
     assert autoexec.installed_autoexec(tmp_path) is None
